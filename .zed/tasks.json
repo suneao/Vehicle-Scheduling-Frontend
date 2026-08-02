@@ -1,0 +1,47 @@
+[
+  {
+    "label": "dev — Next.js 开发服务器",
+    "command": "npm",
+    "args": ["run", "dev"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false,
+    "reveal": "always"
+  },
+  {
+    "label": "build — 生产构建",
+    "command": "npm",
+    "args": ["run", "build"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": true,
+    "reveal": "always"
+  },
+  {
+    "label": "typecheck — TypeScript 类型检查",
+    "command": "npm",
+    "args": ["run", "typecheck"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": true,
+    "reveal": "always"
+  },
+  {
+    "label": "lint — ESLint 检查",
+    "command": "npm",
+    "args": ["run", "lint"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": true,
+    "reveal": "always"
+  },
+  {
+    "label": "format — Prettier 格式化",
+    "command": "npm",
+    "args": ["run", "format"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": true,
+    "reveal": "always"
+  }
+]
