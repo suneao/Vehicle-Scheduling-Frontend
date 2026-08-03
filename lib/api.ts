@@ -225,6 +225,7 @@ export interface CarPosition {
   x: number
   y: number
   speed: number
+  angle?: number
   update_time?: string
 }
 

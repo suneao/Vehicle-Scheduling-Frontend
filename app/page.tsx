@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import dynamic from "next/dynamic"
 import { useRouter } from "next/navigation"
 import {
   carsGetAllPositions,
@@ -9,9 +10,17 @@ import {
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
-import { MapView } from "@/components/map-view"
 import { useAuth } from "@/components/auth-provider"
 import { cn } from "@/lib/utils"
+
+const MapView = dynamic(() => import("@/components/map-view").then((m) => m.MapView), {
+  ssr: false,
+  loading: () => (
+    <div className="flex size-full items-center justify-center">
+      <p className="text-xs text-muted-foreground/40">地图加载中…</p>
+    </div>
+  ),
+})
 import {
   CarIcon,
   GaugeIcon,

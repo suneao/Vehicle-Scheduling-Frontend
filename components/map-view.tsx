@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import AMapLoader from "@amap/amap-jsapi-loader"
+import { useTheme } from "next-themes"
 import type { CarPosition } from "@/lib/api"
 
 /* ==================== 高德类型声明 ==================== */
@@ -28,6 +29,7 @@ interface MapViewProps {
 }
 
 export function MapView({ vehicles }: MapViewProps) {
+  const { resolvedTheme } = useTheme()
   const containerRef = React.useRef<HTMLDivElement>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mapRef = React.useRef<any>(null)
@@ -36,15 +38,20 @@ export function MapView({ vehicles }: MapViewProps) {
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
 
+  const mapStyle =
+    resolvedTheme === "dark"
+      ? "amap://styles/dark"
+      : "amap://styles/macaron"
+
   React.useEffect(() => {
     let cancelled = false
 
-    // 安全密钥必须在加载前设置
     window._AMapSecurityConfig = { securityJsCode: AMAP_SECURITY_CODE }
 
     AMapLoader.load({
       key: AMAP_KEY,
       version: "2.0",
+      plugins: ["AMap.Scale", "AMap.ToolBar"],
     })
       .then((AMap) => {
         if (cancelled || !containerRef.current) return
@@ -53,6 +60,7 @@ export function MapView({ vehicles }: MapViewProps) {
           viewMode: "2D",
           zoom: DEFAULT_ZOOM,
           center: DEFAULT_CENTER,
+          mapStyle,
           resizeEnable: true,
         })
 
@@ -64,8 +72,7 @@ export function MapView({ vehicles }: MapViewProps) {
       })
       .catch((e: unknown) => {
         if (!cancelled) {
-          const msg = e instanceof Error ? e.message : String(e)
-          setError(msg)
+          setError(e instanceof Error ? e.message : String(e))
           setLoading(false)
         }
       })
@@ -77,14 +84,16 @@ export function MapView({ vehicles }: MapViewProps) {
     }
   }, [])
 
-  // 更新车辆标记
+  // 主题切换时更新地图样式
+  React.useEffect(() => {
+    mapRef.current?.instance?.setMapStyle(mapStyle)
+  }, [mapStyle])
   React.useEffect(() => {
     const entry = mapRef.current
     if (!entry) return
 
     const { instance: map, AMap } = entry
 
-    // 清除旧标记
     for (const m of markersRef.current) {
       m.setMap(null)
     }
@@ -96,18 +105,30 @@ export function MapView({ vehicles }: MapViewProps) {
 
     for (const v of vehicles) {
       const alive = v.speed > 0
+      const hasAngle = v.angle != null
 
-      // 用 DOM 创建自定义标记
       const el = document.createElement("div")
       el.style.cssText = "display:flex;flex-direction:column;align-items:center;"
       el.innerHTML = `
-        <div style="
-          width:10px;height:10px;border-radius:50%;
-          background:var(--color-primary,#f59e0b);
-          box-shadow:${alive ? "0 0 10px var(--color-primary,#f59e0b)" : "none"};
-          border:2px solid #fff;
-          opacity:${alive ? 1 : 0.5};
-        "></div>
+        <div style="position:relative;">
+          <div style="
+            width:10px;height:10px;border-radius:50%;
+            background:var(--color-primary,#f59e0b);
+            box-shadow:${alive ? "0 0 10px var(--color-primary,#f59e0b)" : "none"};
+            border:2px solid #fff;
+            opacity:${alive ? 1 : 0.5};
+          "></div>
+          ${hasAngle ? `
+          <div style="
+            position:absolute;top:50%;left:50%;
+            width:0;height:0;margin-left:-3px;margin-top:-13px;
+            border-left:3px solid transparent;
+            border-right:3px solid transparent;
+            border-bottom:8px solid var(--color-primary,#f59e0b);
+            transform:rotate(${v.angle}deg);
+            transform-origin:3px 11px;
+          "></div>` : ""}
+        </div>
         <span style="
           margin-top:2px;font-size:10px;font-weight:600;
           font-family:monospace;color:#333;
@@ -128,28 +149,24 @@ export function MapView({ vehicles }: MapViewProps) {
     }
 
     markersRef.current = markers
-
-    // 适配视野
     map.setFitView(null, false, [80, 80, 80, 80])
   }, [vehicles])
 
-  if (error) {
-    return (
-      <div className="flex size-full items-center justify-center">
-        <p className="max-w-xs text-center text-xs text-muted-foreground/40">
-          地图加载失败: {error}
-        </p>
-      </div>
-    )
-  }
-
-  if (loading) {
-    return (
-      <div className="flex size-full items-center justify-center">
-        <p className="text-xs text-muted-foreground/40">地图加载中…</p>
-      </div>
-    )
-  }
-
-  return <div ref={containerRef} className="size-full" />
+  return (
+    <div className="relative size-full">
+      <div ref={containerRef} className="size-full" />
+      {loading && (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-background/50">
+          <p className="text-xs text-muted-foreground/40">地图加载中…</p>
+        </div>
+      )}
+      {error && (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <p className="max-w-xs text-center text-xs text-muted-foreground/40">
+            地图加载失败: {error}
+          </p>
+        </div>
+      )}
+    </div>
+  )
 }
