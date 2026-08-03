@@ -152,7 +152,7 @@ export async function oauthForget(params: {
   return request("/api/oauth/forget", {
     method: "POST",
     body: JSON.stringify({
-      new_password: params.new_password,
+      new_password: { password: params.new_password },
       validData: {
         email: params.email,
         valid_code: params.valid_code,

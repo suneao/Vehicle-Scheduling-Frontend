@@ -10,8 +10,9 @@ import {
   clearToken,
 } from "@/lib/api"
 
-// 开发模式：后端登录接口暂不可用时，跳过鉴权
+// 开发模式：跳过登录鉴权，直接进入仪表盘
 const DEV_MODE = true
+const DEV_TOKEN = "dev-bypass-token"
 
 interface AuthState {
   token: string | null
@@ -36,9 +37,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   React.useEffect(() => {
     if (DEV_MODE) {
-      // 开发模式：自动设置模拟 token
-      setToken("dev-token")
-      setState({ token: "dev-token", isAuthenticated: true, isLoading: false })
+      setToken(DEV_TOKEN)
+      setState({ token: DEV_TOKEN, isAuthenticated: true, isLoading: false })
       return
     }
     const token = getToken()
@@ -52,8 +52,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = React.useCallback(
     async (username: string, password: string) => {
       if (DEV_MODE) {
-        setToken("dev-token")
-        setState({ token: "dev-token", isAuthenticated: true, isLoading: false })
+        setToken(DEV_TOKEN)
+        setState({ token: DEV_TOKEN, isAuthenticated: true, isLoading: false })
         router.push("/")
         return
       }

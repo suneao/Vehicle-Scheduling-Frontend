@@ -46,7 +46,7 @@ export default function LoginPage() {
         <CardHeader>
           <CardTitle>登录</CardTitle>
           <CardDescription>
-            车辆调度管理系统 · 测试账号 admin / 123456
+            车辆调度管理系统
           </CardDescription>
         </CardHeader>
         <form onSubmit={handleSubmit}>

@@ -16,7 +16,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <div className="flex h-screen flex-col overflow-hidden">
       <Navbar />
       <main
-        className="flex-1 overflow-y-auto px-8 pb-8 pt-4"
+        className="flex min-h-0 flex-1 flex-col overflow-y-auto px-8 py-6"
         style={{
           scrollbarWidth: "thin",
           scrollbarColor: "var(--border) transparent",
