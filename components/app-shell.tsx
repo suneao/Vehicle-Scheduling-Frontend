@@ -1,15 +1,40 @@
 "use client"
 
-import { usePathname } from "next/navigation"
+import * as React from "react"
+import { usePathname, useRouter } from "next/navigation"
 import { Navbar } from "@/components/navbar"
+import { useAuth } from "@/components/auth-provider"
 
 const AUTH_PAGES = ["/login", "/register"]
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
+  const router = useRouter()
+  const { isAuthenticated, isLoading } = useAuth()
+
+  // 全局鉴权守卫：未登录访问任何受保护页面时跳转登录页
+  React.useEffect(() => {
+    if (!isLoading && !isAuthenticated) {
+      router.replace("/login")
+    }
+  }, [isLoading, isAuthenticated, router, pathname])
 
   if (AUTH_PAGES.includes(pathname)) {
     return <>{children}</>
+  }
+
+  // 等待鉴权状态确定
+  if (isLoading) {
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <p className="text-xs text-muted-foreground/40">加载中…</p>
+      </div>
+    )
+  }
+
+  // 未登录时渲染空白，等待重定向
+  if (!isAuthenticated) {
+    return null
   }
 
   return (

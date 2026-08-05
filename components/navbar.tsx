@@ -14,6 +14,7 @@ import {
   LayoutDashboardIcon,
   SunIcon,
   MoonIcon,
+  UserIcon,
 } from "lucide-react"
 
 const navItems = [
@@ -21,6 +22,8 @@ const navItems = [
   { href: "/schedule", label: "调度", icon: CalendarIcon },
   { href: "/settings", label: "设置", icon: SettingsIcon },
 ]
+
+const userItems = [{ href: "/account", label: "账户", icon: UserIcon }]
 
 export function Navbar() {
   const pathname = usePathname()
@@ -63,6 +66,22 @@ export function Navbar() {
         </div>
 
         <div className="flex items-center gap-1.5">
+          {userItems.map((item) => {
+            const isActive = pathname === item.href
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                aria-label={item.label}
+                className={cn(
+                  "flex size-7 items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-muted/50 hover:text-foreground",
+                  isActive && "bg-muted text-foreground"
+                )}
+              >
+                <item.icon className="size-3.5" />
+              </Link>
+            )
+          })}
           <Button
             variant="ghost"
             size="icon-xs"

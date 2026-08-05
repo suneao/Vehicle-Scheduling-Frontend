@@ -4,6 +4,7 @@ import * as React from "react"
 import AMapLoader from "@amap/amap-jsapi-loader"
 import { useTheme } from "next-themes"
 import type { CarPosition } from "@/lib/api"
+import { getMapThemeConfig } from "@/lib/map-theme"
 
 const AMAP_KEY = process.env.NEXT_PUBLIC_AMAP_KEY ?? ""
 const AMAP_SECURITY_CODE = process.env.NEXT_PUBLIC_AMAP_SECURITY_CODE ?? ""
@@ -27,8 +28,10 @@ export function ScheduleMap({ vehicles, onSelect, selectedId }: ScheduleMapProps
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
 
-  const mapStyle =
-    resolvedTheme === "dark" ? "amap://styles/dark" : "amap://styles/macaron"
+  const mapStyle = React.useMemo(() => {
+    const cfg = getMapThemeConfig()
+    return resolvedTheme === "dark" ? cfg.dark : cfg.light
+  }, [resolvedTheme])
 
   // 初始化地图
   React.useEffect(() => {

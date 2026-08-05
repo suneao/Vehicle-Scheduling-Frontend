@@ -11,7 +11,7 @@ import {
 } from "@/lib/api"
 
 // 开发模式：跳过登录鉴权，直接进入仪表盘
-const DEV_MODE = true
+const DEV_MODE = false
 const DEV_TOKEN = "dev-bypass-token"
 
 interface AuthState {
@@ -58,7 +58,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return
       }
       const res = await apiLogin(username, password)
-      const token = res.data.access_token
+      const token = res.data.token
       setToken(token)
       setState({ token, isAuthenticated: true, isLoading: false })
       router.push("/")

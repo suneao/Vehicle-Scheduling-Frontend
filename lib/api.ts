@@ -25,6 +25,38 @@ export function clearToken(): void {
   localStorage.removeItem(TOKEN_KEY)
 }
 
+/** JWT token 解码（不校验签名，仅读取 payload） */
+export function decodeToken(token: string): Record<string, unknown> | null {
+  try {
+    const parts = token.split(".")
+    if (parts.length < 2) return null
+    const payload = parts[1].replace(/-/g, "+").replace(/_/g, "/")
+    const padded = payload.padEnd(payload.length + ((4 - (payload.length % 4)) % 4), "=")
+    const json = decodeURIComponent(
+      atob(padded)
+        .split("")
+        .map((c) => "%" + c.charCodeAt(0).toString(16).padStart(2, "0"))
+        .join("")
+    )
+    return JSON.parse(json)
+  } catch {
+    return null
+  }
+}
+
+/** 从当前 token 获取身份信息（id / name / isAdmin），失败返回 null */
+export function getCurrentUser(): { id?: number; name?: string; isAdmin?: boolean } | null {
+  const token = getToken()
+  if (!token) return null
+  const payload = decodeToken(token)
+  if (!payload) return null
+  return {
+    id: typeof payload.id === "number" ? payload.id : undefined,
+    name: typeof payload.name === "string" ? payload.name : undefined,
+    isAdmin: payload.isAdmin === true,
+  }
+}
+
 // ==================== 响应类型 ====================
 
 export interface ApiResponse<T = unknown> {
@@ -108,11 +140,32 @@ export enum OrderStatus {
   Cancelled = 4,
 }
 
+/** 登录响应 */
+export interface LoginResult {
+  token: string
+  token_type: string
+}
+
+/** 用户信息 */
+export interface UserInfo {
+  id: number
+  name: string
+  nickname: string
+  email: string
+  phone?: number
+  roles?: string[]
+  address_id?: number
+  create_time?: string
+  last_active_time?: string
+  isActive?: boolean
+  isAdmin?: boolean
+}
+
 // ==================== 1. 认证模块 (OAuth) ====================
 
 /** POST /api/oauth/login — 登录 */
 export async function oauthLogin(username: string, password: string) {
-  return request<{ access_token: string; token_type: string }>(
+  return request<LoginResult>(
     "/api/oauth/login",
     { method: "POST", body: JSON.stringify({ username, password }) }
   )
@@ -166,7 +219,7 @@ export async function oauthForget(params: {
 /** GET /api/commons/userinfo — 获取用户信息 */
 export async function commonsGetUserInfo(userId?: number) {
   const params = userId ? `?user_id=${userId}` : ""
-  return request(`/api/commons/userinfo${params}`)
+  return request<UserInfo>(`/api/commons/userinfo${params}`)
 }
 
 /** GET /api/commons/maplist — 获取地图列表 */
@@ -365,9 +418,41 @@ export async function adminItemsGetProcess(itemId: number) {
 
 // ==================== 6. 用户管理模块 (Admin Users) ====================
 
+/** 用户列表项 */
+export interface UserListItem {
+  id: number
+  name: string
+}
+
+/** 用户更新参数 */
+export interface UserUpdateParams {
+  name?: string
+  nickname?: string
+  email?: string
+  phone?: string
+  isActive?: boolean
+  isAdmin?: boolean
+  address_id?: number
+}
+
 /** GET /api/admin/user/getuserlist — 获取用户列表 */
 export async function adminGetUserList() {
-  return request("/api/admin/user/getuserlist")
+  return request<UserListItem[]>("/api/admin/user/getuserlist")
+}
+
+/** PUT /api/admin/user/{user_id} — 管理员修改指定用户信息，返回修改后的完整用户 */
+export async function adminUserUpdate(userId: number, params: UserUpdateParams) {
+  return request<UserInfo>(`/api/admin/user/${userId}`, {
+    method: "PUT",
+    body: JSON.stringify(params),
+  })
+}
+
+/** DELETE /api/admin/user/{user_id} — 管理员删除指定用户账号 */
+export async function adminUserDelete(userId: number) {
+  return request(`/api/admin/user/${userId}`, {
+    method: "DELETE",
+  })
 }
 
 // ==================== 7. 客户端订单模块 (Client Orders) ====================
@@ -441,6 +526,35 @@ export async function clientItemsGetProcess(itemId: number) {
   return request(
     `/api/client/items/getitemprocess?item_id=${itemId}`
   )
+}
+
+// ==================== 9. 测试模块 (Test) ====================
+
+/** POST /api/test/ — Hello World */
+export async function testHello(name: string) {
+  return request("/api/test/", {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  })
+}
+
+/** GET /api/test/user — 获取测试用户信息 */
+export async function testGetUserInfo() {
+  return request("/api/test/user")
+}
+
+/** POST /api/test/login — 兼容 OAuth2 的令牌登录（form-urlencoded） */
+export async function testLogin(username: string, password: string) {
+  const body = new URLSearchParams({
+    username,
+    password,
+    grant_type: "password",
+  })
+  return request<{ access_token: string; token_type: string }>("/api/test/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: body.toString(),
+  })
 }
 
 // ==================== 便捷导出：兼容旧版简写 ====================

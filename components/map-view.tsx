@@ -4,6 +4,7 @@ import * as React from "react"
 import AMapLoader from "@amap/amap-jsapi-loader"
 import { useTheme } from "next-themes"
 import type { CarPosition } from "@/lib/api"
+import { getMapThemeConfig } from "@/lib/map-theme"
 
 /* ==================== 高德类型声明 ==================== */
 
@@ -38,10 +39,10 @@ export function MapView({ vehicles }: MapViewProps) {
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
 
-  const mapStyle =
-    resolvedTheme === "dark"
-      ? "amap://styles/dark"
-      : "amap://styles/macaron"
+  const mapStyle = React.useMemo(() => {
+    const cfg = getMapThemeConfig()
+    return resolvedTheme === "dark" ? cfg.dark : cfg.light
+  }, [resolvedTheme])
 
   React.useEffect(() => {
     let cancelled = false
