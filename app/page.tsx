@@ -40,6 +40,8 @@ export default function DashboardPage() {
   const [logs, setLogs] = React.useState<{ time: string; text: string; type: "info" | "warn" | "error" }[]>([])
   const [logFull, setLogFull] = React.useState(false)
   const [uptime, setUptime] = React.useState(0)
+  // 上一次车辆数量（用 ref 避免 effect 闭包捕获 stale 状态导致刷屏）
+  const prevCountRef = React.useRef(0)
 
   // 鉴权守卫：未登录跳转登录页
   React.useEffect(() => {
@@ -69,10 +71,15 @@ export default function DashboardPage() {
         if (cancelled) return
 
         const newPositions = (res?.data as Record<string, CarPosition>) || {}
-        const oldCount = Object.keys(positions).length
+        const oldCount = prevCountRef.current
         const newCount = Object.keys(newPositions).length
-        if (newCount !== oldCount && newCount > 0) {
-          addLog(`车辆数量变更: ${oldCount} → ${newCount}`)
+        if (newCount !== oldCount) {
+          prevCountRef.current = newCount
+          if (newCount > 0) {
+            addLog(`车辆数量变更: ${oldCount} → ${newCount}`)
+          } else if (oldCount > 0) {
+            addLog("所有车辆已断开", "warn")
+          }
         }
 
         setPositions(newPositions)
@@ -94,7 +101,6 @@ export default function DashboardPage() {
       clearInterval(interval)
       clearInterval(uptimeTimer)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const carList = Object.values(positions)
@@ -200,7 +206,7 @@ export default function DashboardPage() {
           <h2 className="text-xs font-medium text-foreground/60">系统日志</h2>
           <span className="font-mono text-[10px] text-muted-foreground/30">最近 {logs.length} 条</span>
         </div>
-        <div className="font-mono">
+        <div className="max-h-48 overflow-y-auto font-mono">
           {logs.length === 0 ? (
             <p className="py-4 text-center text-xs text-muted-foreground/30">暂无日志</p>
           ) : (

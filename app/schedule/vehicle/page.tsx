@@ -51,7 +51,14 @@ export default function VehicleSchedulePage() {
         const res = await carsGetAllPositions()
         if (!cancelled) {
           const data = (res.data as Record<string, CarPosition>) ?? {}
-          setVehicles(Object.values(data))
+          const list = Object.values(data)
+          setVehicles(list)
+          // 同步更新选中车辆：若选中车辆仍在列表中，刷新其实时数据
+          setSelected((prev) => {
+            if (!prev) return prev
+            const updated = list.find((v) => v.car_id === prev.car_id)
+            return updated ?? prev
+          })
         }
       } catch { /* ignore */ }
     }
@@ -104,7 +111,7 @@ export default function VehicleSchedulePage() {
       <div className="grid flex-1 grid-cols-1 gap-5 lg:grid-cols-[3fr_1fr]" style={{ minHeight: 0 }}>
         {/* 地图 */}
         <Card className="flex flex-col" style={{ minHeight: 0 }}>
-          <CardContent className="flex-1 p-0!" style={{ minHeight: 0 }}>
+          <CardContent className="relative flex-1 p-0!" style={{ minHeight: 0 }}>
             <ScheduleMap
               vehicles={vehicles}
               onSelect={setSelected}
@@ -197,13 +204,13 @@ function VehicleRow({
             {vehicle.car_id}
           </p>
           <p className="truncate font-mono text-[11px] text-muted-foreground/40 tabular-nums">
-            {vehicle.x.toFixed(1)}, {vehicle.y.toFixed(1)}
+            {vehicle.x.toFixed(4)}, {vehicle.y.toFixed(4)}
           </p>
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-2">
         <span className="font-mono text-[10px] tabular-nums text-muted-foreground/40">
-          {vehicle.speed.toFixed(1)} m/s
+          {vehicle.speed.toFixed(2)} m/s
         </span>
         <Badge variant={alive ? "default" : "secondary"} className="text-[10px]">
           {alive ? "运行" : "待机"}
@@ -250,7 +257,7 @@ function VehicleDetail({
         </CardHeader>
         <CardContent className="flex flex-col gap-2.5">
           <InfoRow icon={MapPinIcon} label="坐标">
-            ({vehicle.x.toFixed(2)}, {vehicle.y.toFixed(2)})
+            ({vehicle.x.toFixed(5)}, {vehicle.y.toFixed(5)})
           </InfoRow>
           <InfoRow icon={GaugeIcon} label="速度">
             {vehicle.speed.toFixed(2)} m/s

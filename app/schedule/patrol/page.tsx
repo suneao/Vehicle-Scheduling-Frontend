@@ -56,7 +56,14 @@ export default function PatrolSchedulePage() {
         const res = await carsGetAllPositions()
         if (!cancelled) {
           const data = (res.data as Record<string, CarPosition>) ?? {}
-          setRobots(Object.values(data))
+          const list = Object.values(data)
+          setRobots(list)
+          // 同步更新选中机器狗：若仍在线则刷新其实时数据
+          setSelected((prev) => {
+            if (!prev) return prev
+            const updated = list.find((v) => v.car_id === prev.car_id)
+            return updated ?? prev
+          })
         }
       } catch { /* ignore */ }
     }
@@ -108,7 +115,7 @@ export default function PatrolSchedulePage() {
       <div className="grid flex-1 grid-cols-1 gap-5 lg:grid-cols-[3fr_1fr]" style={{ minHeight: 0 }}>
         {/* 地图 */}
         <Card className="flex flex-col" style={{ minHeight: 0 }}>
-          <CardContent className="flex-1 p-0!" style={{ minHeight: 0 }}>
+          <CardContent className="relative flex-1 p-0!" style={{ minHeight: 0 }}>
             <ScheduleMap
               vehicles={robots}
               onSelect={setSelected}
@@ -235,13 +242,13 @@ function RobotRow({
             {robot.car_id}
           </p>
           <p className="truncate font-mono text-[11px] text-muted-foreground/40 tabular-nums">
-            {robot.x.toFixed(1)}, {robot.y.toFixed(1)}
+            {robot.x.toFixed(4)}, {robot.y.toFixed(4)}
           </p>
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-2">
         <span className="font-mono text-[10px] tabular-nums text-muted-foreground/40">
-          {robot.speed.toFixed(1)} m/s
+          {robot.speed.toFixed(2)} m/s
         </span>
         <Badge variant={alive ? "default" : "secondary"} className="text-[10px]">
           {alive ? "巡逻中" : "待机"}
@@ -288,7 +295,7 @@ function RobotDetail({
         </CardHeader>
         <CardContent className="flex flex-col gap-2.5">
           <InfoRow icon={MapPinIcon} label="坐标">
-            ({robot.x.toFixed(2)}, {robot.y.toFixed(2)})
+            ({robot.x.toFixed(5)}, {robot.y.toFixed(5)})
           </InfoRow>
           <InfoRow icon={GaugeIcon} label="速度">
             {robot.speed.toFixed(2)} m/s
