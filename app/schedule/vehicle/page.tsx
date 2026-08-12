@@ -7,13 +7,30 @@ import { toast } from "sonner"
 import {
   carsGetAllPositions,
   carsSetStatus,
+  carsRunDemo,
   CtlCode,
   type CarPosition,
 } from "@/lib/api"
+import { getRoutes, type Route } from "@/lib/routes"
+import {
+  getRouteAssignments,
+  setRouteAssignment,
+} from "@/lib/route-assignments"
+import { releaseVehicleStops } from "@/lib/virtual-vehicles"
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+  SelectGroup,
+  SelectLabel,
+  SelectSeparator,
+} from "@/components/ui/select"
 import {
   ArrowLeftIcon,
   ArrowRightIcon,
@@ -22,6 +39,9 @@ import {
   MapPinIcon,
   NavigationIcon,
   ChevronLeftIcon,
+  RouteIcon,
+  RouteOffIcon,
+  ExternalLinkIcon,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -42,6 +62,25 @@ export default function VehicleSchedulePage() {
   const [vehicles, setVehicles] = React.useState<CarPosition[]>([])
   const [selected, setSelected] = React.useState<CarPosition | null>(null)
   const [busy, setBusy] = React.useState(false)
+  const [routes, setRoutes] = React.useState<Route[]>([])
+  const [assignments, setAssignments] = React.useState<Record<number, number>>({})
+
+  React.useEffect(() => {
+    setRoutes(getRoutes())
+    setAssignments(getRouteAssignments())
+  }, [])
+
+  // 设置/清除车辆路线
+  function handleRouteChange(vehicleId: number, routeId: number | null) {
+    setRouteAssignment(vehicleId, routeId)
+    setAssignments(getRouteAssignments())
+    toast.success(routeId ? "已设置执行路线" : "已清除执行路线")
+  }
+
+  // 选中车辆正在执行的路线
+  const selectedRoute = selected
+    ? (routes.find((r) => r.id === assignments[selected.car_id]) ?? null)
+    : null
 
   // 轮询车辆位置
   React.useEffect(() => {
@@ -70,12 +109,29 @@ export default function VehicleSchedulePage() {
   // 发送控制指令
   async function sendCommand(code: CtlCode, label: string) {
     if (!selected) return
+    // 继续 = 释放手动站点等待（发车）
+    if (code === CtlCode.CONTINUE) releaseVehicleStops(selected.car_id)
     setBusy(true)
     try {
       await carsSetStatus(selected.car_id, code)
       toast.success(`车辆 #${selected.car_id}: ${label}`)
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "指令发送失败")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // 循迹导航：沿分配的执行路线开始行驶（taskId 即路线 id）
+  async function handleTrack() {
+    if (!selected || !selectedRoute) return
+    releaseVehicleStops(selected.car_id)
+    setBusy(true)
+    try {
+      await carsRunDemo(selectedRoute.id, selected.car_id)
+      toast.success(`车辆 #${selected.car_id} 已开始循迹「${selectedRoute.name}」`)
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "循迹指令发送失败")
     } finally {
       setBusy(false)
     }
@@ -116,6 +172,7 @@ export default function VehicleSchedulePage() {
               vehicles={vehicles}
               onSelect={setSelected}
               selectedId={selected?.car_id}
+              assignedRoute={selectedRoute}
             />
           </CardContent>
         </Card>
@@ -129,6 +186,10 @@ export default function VehicleSchedulePage() {
               commands={commands}
               onCommand={sendCommand}
               onBack={() => setSelected(null)}
+              routes={routes}
+              assignedRouteId={assignments[selected.car_id] ?? null}
+              onRouteChange={handleRouteChange}
+              onTrack={handleTrack}
             />
           ) : (
             <VehicleList vehicles={vehicles} onSelect={setSelected} />
@@ -229,13 +290,22 @@ function VehicleDetail({
   commands,
   onCommand,
   onBack,
+  routes,
+  assignedRouteId,
+  onRouteChange,
+  onTrack,
 }: {
   vehicle: CarPosition
   busy: boolean
   commands: { code: CtlCode; label: string; variant: "default" | "secondary" | "destructive" | "ghost" }[]
   onCommand: (code: CtlCode, label: string) => void
   onBack: () => void
+  routes: Route[]
+  assignedRouteId: number | null
+  onRouteChange: (vehicleId: number, routeId: number | null) => void
+  onTrack: () => void
 }) {
+  const assignedRoute = routes.find((r) => r.id === assignedRouteId) ?? null
   return (
     <>
       {/* 车辆信息 */}
@@ -271,6 +341,66 @@ function VehicleDetail({
             <InfoRow icon={CarIcon} label="更新">
               {vehicle.update_time}
             </InfoRow>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* 执行路线 */}
+      <Card size="sm">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <RouteIcon className="size-4 text-primary" />
+            执行路线
+          </CardTitle>
+          <CardDescription>分配后车辆将沿路线行驶</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-2">
+          <Select
+            value={assignedRouteId ? String(assignedRouteId) : "none"}
+            onValueChange={(v) => {
+              onRouteChange(vehicle.car_id, v === "none" ? null : Number(v))
+            }}
+          >
+            <SelectTrigger size="sm" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent align="start">
+              <SelectGroup>
+                <SelectLabel>执行路线</SelectLabel>
+                <SelectItem value="none">
+                  <RouteOffIcon className="size-3.5" />
+                  未分配路线
+                </SelectItem>
+                {routes.length > 0 && <SelectSeparator />}
+                {routes.map((r) => (
+                  <SelectItem key={r.id} value={String(r.id)}>
+                    <span
+                      className="size-2 shrink-0 rounded-full"
+                      style={{ backgroundColor: r.color ?? "#3b82f6" }}
+                    />
+                    {r.name}（{r.points.length} 点）
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+          <Link
+            href="/schedule/routes"
+            className="inline-flex items-center gap-1 text-[11px] text-muted-foreground/50 transition-colors hover:text-foreground"
+          >
+            <ExternalLinkIcon className="size-3" />
+            管理路线
+          </Link>
+          {assignedRoute && (
+            <Button
+              size="sm"
+              className="w-full"
+              disabled={busy}
+              onClick={onTrack}
+            >
+              <NavigationIcon data-icon="inline-start" />
+              循迹导航：{assignedRoute.name}
+            </Button>
           )}
         </CardContent>
       </Card>

@@ -5,6 +5,7 @@
  */
 
 import { VIRTUAL_VEHICLES_ENABLED, getVirtualCarPositions } from "@/lib/virtual-vehicles"
+import { getRouteMapForVehicles } from "@/lib/route-assignments"
 
 // ==================== 基础配置 ====================
 
@@ -307,16 +308,20 @@ export async function carsGetAllPositions() {
       "/api/admin/cars/position/all",
       { signal: controller.signal }
     )
-    // 真实车辆为空时注入虚拟小车（前端测试用）
+    // 真实车辆为空时注入虚拟小车（前端测试用）；有路线分配的车辆沿路线行走
     const data = res.data ?? {}
     if (Object.keys(data).length === 0 && VIRTUAL_VEHICLES_ENABLED) {
-      return { ...res, data: getVirtualCarPositions() }
+      return { ...res, data: getVirtualCarPositions(getRouteMapForVehicles()) }
     }
     return res
   } catch {
     // 请求失败/超时：测试模式下仍返回实时虚拟小车
     if (VIRTUAL_VEHICLES_ENABLED) {
-      return { code: 200, msg: "虚拟小车", data: getVirtualCarPositions() }
+      return {
+        code: 200,
+        msg: "虚拟小车",
+        data: getVirtualCarPositions(getRouteMapForVehicles()),
+      }
     }
     throw new Error("获取车辆位置失败")
   } finally {

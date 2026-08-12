@@ -15,12 +15,14 @@ import {
   SunIcon,
   MoonIcon,
   UserIcon,
+  CircleHelpIcon,
 } from "lucide-react"
 
 const navItems = [
   { href: "/", label: "仪表盘", icon: LayoutDashboardIcon },
   { href: "/schedule", label: "调度", icon: CalendarIcon },
   { href: "/settings", label: "设置", icon: SettingsIcon },
+  { href: "/help", label: "帮助", icon: CircleHelpIcon },
 ]
 
 const userItems = [{ href: "/account", label: "账户", icon: UserIcon }]

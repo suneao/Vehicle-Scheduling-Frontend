@@ -4,7 +4,9 @@ import * as React from "react"
 import AMapLoader from "@amap/amap-jsapi-loader"
 import { useTheme } from "next-themes"
 import type { CarPosition } from "@/lib/api"
+import type { Route } from "@/lib/routes"
 import { getMapThemeConfig } from "@/lib/map-theme"
+import { pointMarkerHtml, endMarkerHtml, stopMarkerHtml } from "@/lib/map-markers"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { LocateFixedIcon, MoveIcon, CrosshairIcon } from "lucide-react"
@@ -35,9 +37,20 @@ interface AMapMarkerInstance {
 interface AMapNamespace {
   Map: new (container: HTMLElement, opts: Record<string, unknown>) => AMapMapInstance
   Marker: new (opts: Record<string, unknown>) => AMapMarkerInstance
+  Polyline: new (opts: Record<string, unknown>) => {
+    setMap: (map: AMapMapInstance | null) => void
+  }
   Pixel: new (x: number, y: number) => unknown
   Scale: new () => unknown
   ToolBar: new (opts: Record<string, unknown>) => unknown
+  Driving: new (opts: Record<string, unknown>) => {
+    search: (
+      origin: [number, number],
+      dest: [number, number],
+      callback: (status: string, result: unknown) => void
+    ) => void
+  }
+  plugin: (name: string, callback: () => void) => void
 }
 
 const AMAP_KEY = process.env.NEXT_PUBLIC_AMAP_KEY ?? ""
@@ -76,13 +89,19 @@ interface ScheduleMapProps {
   vehicles: CarPosition[]
   onSelect: (vehicle: CarPosition | null) => void
   selectedId?: number
+  /** 选中车辆/机器狗正在执行的路线（用于地图上展示） */
+  assignedRoute?: Route | null
 }
 
-export function ScheduleMap({ vehicles, onSelect, selectedId }: ScheduleMapProps) {
+export function ScheduleMap({ vehicles, onSelect, selectedId, assignedRoute }: ScheduleMapProps) {
   const { resolvedTheme } = useTheme()
   const containerRef = React.useRef<HTMLDivElement>(null)
   const mapRef = React.useRef<{ instance: AMapMapInstance; AMap: AMapNamespace } | null>(null)
   const markersRef = React.useRef<AMapMarkerInstance[]>([])
+  const routeOverlaysRef = React.useRef<any[]>([])
+  const navOverlaysRef = React.useRef<any[]>([])
+  const routeFitKeyRef = React.useRef<string | null>(null)
+  const navKeyRef = React.useRef<string | null>(null)
   const onSelectRef = React.useRef(onSelect)
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
@@ -115,7 +134,7 @@ export function ScheduleMap({ vehicles, onSelect, selectedId }: ScheduleMapProps
     const container = containerRef.current
     window._AMapSecurityConfig = { securityJsCode: AMAP_SECURITY_CODE }
 
-    AMapLoader.load({ key: AMAP_KEY, version: "2.0", plugins: ["AMap.Scale"] })
+    AMapLoader.load({ key: AMAP_KEY, version: "2.0", plugins: ["AMap.Scale", "AMap.Driving"] })
       .then((AMap: AMapNamespace) => {
         if (cancelled || !container) return
 
@@ -160,14 +179,208 @@ export function ScheduleMap({ vehicles, onSelect, selectedId }: ScheduleMapProps
     mapRef.current?.instance?.setMapStyle(mapStyle)
   }, [mapStyle])
 
+  // 选中车辆/机器狗的执行路线：带描边的折线 + 起/终标记
+  React.useEffect(() => {
+    const entry = mapRef.current
+    if (!entry) return
+    const { instance: map, AMap } = entry
+
+    for (const o of routeOverlaysRef.current) o.setMap?.(null)
+    routeOverlaysRef.current = []
+
+    const isValidPoint = (p: [number, number]) =>
+      Number.isFinite(p[0]) && Number.isFinite(p[1])
+    if (!assignedRoute) return
+    // 贴路路径优先（无则用航点直线连接）
+    const points = (
+      assignedRoute.path && assignedRoute.path.length >= 2
+        ? assignedRoute.path
+        : assignedRoute.points
+    ).filter(isValidPoint)
+    if (points.length < 2) return
+
+    const color = assignedRoute.color ?? "#3b82f6"
+    const casingColor =
+      resolvedTheme === "dark" ? "rgba(255,255,255,0.38)" : "rgba(15,23,42,0.42)"
+
+    // 深色描边 + 主色线（带方向箭头）
+    const casing = new AMap.Polyline({
+      path: points,
+      strokeColor: casingColor,
+      strokeWeight: 8.5,
+      strokeOpacity: 1,
+      strokeStyle: "solid",
+      lineJoin: "round",
+      lineCap: "round",
+    })
+    casing.setMap(map)
+    routeOverlaysRef.current.push(casing)
+
+    const poly = new AMap.Polyline({
+      path: points,
+      strokeColor: color,
+      strokeWeight: 5,
+      strokeOpacity: 0.9,
+      strokeStyle: "solid",
+      lineJoin: "round",
+      lineCap: "round",
+      showDir: true,
+    })
+    poly.setMap(map)
+    routeOverlaysRef.current.push(poly)
+
+    // 起点（实心圆 + 起）与终点（白色圆环 + 终）标记
+    const startMarker = new AMap.Marker({
+      position: points[0],
+      offset: new AMap.Pixel(-9, -9),
+      content: pointMarkerHtml(color, "起", 18),
+      zIndex: 90,
+    })
+    startMarker.setMap(map)
+    routeOverlaysRef.current.push(startMarker)
+
+    const endMarker = new AMap.Marker({
+      position: points[points.length - 1],
+      offset: new AMap.Pixel(-9, -9),
+      content: endMarkerHtml(color),
+      zIndex: 90,
+    })
+    endMarker.setMap(map)
+    routeOverlaysRef.current.push(endMarker)
+
+    // 途径站点：菱形标记（位于航点上）
+    if (Array.isArray(assignedRoute.stops)) {
+      assignedRoute.stops.forEach((s, i) => {
+        const wp = assignedRoute.points[i]
+        if (!s || !wp) return
+        const stopMarker = new AMap.Marker({
+          position: wp,
+          offset: new AMap.Pixel(-9, -9),
+          content: stopMarkerHtml(color),
+          zIndex: 90,
+        })
+        stopMarker.setMap(map)
+        routeOverlaysRef.current.push(stopMarker)
+      })
+    }
+  }, [assignedRoute, resolvedTheme])
+
+  // 导航到路线起点：调用高德驾车路径规划 API，从车辆当前位置规划到路线起点并显示
+  React.useEffect(() => {
+    const entry = mapRef.current
+    if (!entry) return
+    const { instance: map, AMap } = entry
+
+    // 仅在选中对象/路线变化时重新规划，避免每秒轮询反复请求 API
+    const key = `${selectedId}:${assignedRoute?.id ?? "none"}`
+    if (navKeyRef.current === key) return
+    navKeyRef.current = key
+
+    for (const o of navOverlaysRef.current) o.setMap?.(null)
+    navOverlaysRef.current = []
+
+    const isValidPoint = (p: [number, number]) =>
+      Number.isFinite(p[0]) && Number.isFinite(p[1])
+    if (!assignedRoute || assignedRoute.points.length < 2) return
+    const v = vehicles.find((item) => item.car_id === selectedId)
+    if (!v || !isValidPoint([v.x, v.y])) return
+
+    const origin: [number, number] = [v.x, v.y]
+    const dest = assignedRoute.points[0]
+    const casingColor =
+      resolvedTheme === "dark" ? "rgba(255,255,255,0.35)" : "rgba(15,23,42,0.35)"
+
+    /** 绘制导航路径（虚线，与执行路线区分） */
+    const drawNav = (path: [number, number][]) => {
+      if (path.length < 2) return
+      const casing = new AMap.Polyline({
+        path,
+        strokeColor: casingColor,
+        strokeWeight: 7,
+        strokeOpacity: 1,
+        strokeStyle: "solid",
+        lineJoin: "round",
+        lineCap: "round",
+      })
+      casing.setMap(map)
+      navOverlaysRef.current.push(casing)
+      const line = new AMap.Polyline({
+        path,
+        strokeColor: "#64748b",
+        strokeWeight: 4,
+        strokeOpacity: 0.85,
+        strokeStyle: "dashed",
+        strokeDasharray: [8, 6],
+        lineJoin: "round",
+        lineCap: "round",
+      })
+      line.setMap(map)
+      navOverlaysRef.current.push(line)
+    }
+
+    // 先画一条直线虚线兜底，路径规划完成后替换为真实导航路径
+    drawNav([origin, dest])
+
+    const doResolve = () => {
+      const driving = new AMap.Driving({ policy: 0 }) // 0 = 速度优先
+      driving.search(origin, dest, (status: string, result: unknown) => {
+        if (status !== "complete") return
+        const routes = (result as any)?.routes
+        const steps = routes?.[0]?.steps
+        if (!Array.isArray(steps)) return
+        const path = steps.flatMap((s: any) => s.path ?? [])
+        if (path.length < 2) return
+        // 替换兜底直线为真实导航路径
+        for (const o of navOverlaysRef.current) o.setMap?.(null)
+        navOverlaysRef.current = []
+        drawNav(
+          path.map((p: any) => [
+            Number.isFinite(p?.getLng?.()) ? p.getLng() : p?.[0],
+            Number.isFinite(p?.getLat?.()) ? p.getLat() : p?.[1],
+          ])
+        )
+        // 视野适配：包含执行路线 + 导航路径
+        const all = [...routeOverlaysRef.current, ...navOverlaysRef.current].filter(Boolean)
+        if (all.length > 0) {
+          map.setFitView(all, false, [60, 60, 60, 60])
+        }
+      })
+    }
+
+    if (typeof AMap.Driving === "function") {
+      doResolve()
+    } else {
+      // 插件未就绪：显式加载后重试
+      AMap.plugin("AMap.Driving", () => {
+        if (typeof AMap.Driving === "function") doResolve()
+      })
+    }
+  }, [vehicles, selectedId, assignedRoute, resolvedTheme])
+
   // 视角控制：跟随模式自动调整地图视角
   React.useEffect(() => {
     const map = mapRef.current?.instance
     if (!map) return
     if (mode === "free") return
 
-    // 选中车辆：地图中心跟随车辆，放大局部视角
+    // 选中车辆/机器狗
     if (selectedId != null) {
+      // 有执行路线：视野适配整条路线（含车辆，车辆在路线上移动）
+      const fitKey = `${selectedId}:${assignedRoute?.id ?? "none"}`
+      if (
+        assignedRoute &&
+        assignedRoute.points.length >= 2 &&
+        routeFitKeyRef.current !== fitKey
+      ) {
+        const overlays = routeOverlaysRef.current.filter(Boolean)
+        if (overlays.length > 0) {
+          routeFitKeyRef.current = fitKey
+          map.setRotation(0)
+          map.setPitch(0)
+          map.setFitView(overlays, false, [70, 70, 70, 70])
+          return
+        }
+      }
       const v = vehicles.find((item) => item.car_id === selectedId)
       if (v) {
         map.setCenter([v.x, v.y])
@@ -179,12 +392,13 @@ export function ScheduleMap({ vehicles, onSelect, selectedId }: ScheduleMapProps
     }
 
     // 未选中：动态囊括所有车辆的最佳视角
+    routeFitKeyRef.current = null
     map.setRotation(0)
     map.setPitch(0)
     if (vehicles.length > 0) {
       map.setFitView(null, false, [60, 60, 60, 60])
     }
-  }, [vehicles, selectedId, mode])
+  }, [vehicles, selectedId, mode, assignedRoute])
 
   // 居中按钮：重置视角为初始位置
   function centerMap() {
@@ -309,7 +523,8 @@ export function ScheduleMap({ vehicles, onSelect, selectedId }: ScheduleMapProps
 
   return (
     // 绝对定位填满父级（父级需 relative），避免 flex 中 height:100% 解析为 0 导致渲染模糊
-    <div className="absolute inset-0">
+    // isolate + overflow-hidden：隔离层叠并裁剪越界覆盖物，防止拦截相邻面板点击
+    <div className="absolute inset-0 isolate overflow-hidden">
       <div ref={containerRef} className="size-full" />
 
       {/* 视角控制按钮（右上角，独立按钮） */}

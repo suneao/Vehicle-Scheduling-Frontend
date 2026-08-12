@@ -7,6 +7,7 @@ import { toast } from "sonner"
 import {
   carsGetAllPositions,
   carsSetStatus,
+  carsRunDemo,
   CtlCode,
   type CarPosition,
 } from "@/lib/api"
@@ -14,6 +15,22 @@ import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+  SelectGroup,
+  SelectLabel,
+  SelectSeparator,
+} from "@/components/ui/select"
+import { getRoutes, type Route } from "@/lib/routes"
+import {
+  getRouteAssignments,
+  setRouteAssignment,
+} from "@/lib/route-assignments"
+import { releaseVehicleStops } from "@/lib/virtual-vehicles"
 import {
   ArrowLeftIcon,
   ArrowRightIcon,
@@ -23,6 +40,8 @@ import {
   MapPinIcon,
   NavigationIcon,
   RouteIcon,
+  RouteOffIcon,
+  ExternalLinkIcon,
   PlayIcon,
   PauseIcon,
   SquareIcon,
@@ -47,6 +66,25 @@ export default function PatrolSchedulePage() {
   const [robots, setRobots] = React.useState<CarPosition[]>([])
   const [selected, setSelected] = React.useState<CarPosition | null>(null)
   const [busy, setBusy] = React.useState(false)
+  const [routes, setRoutes] = React.useState<Route[]>([])
+  const [assignments, setAssignments] = React.useState<Record<number, number>>({})
+
+  React.useEffect(() => {
+    setRoutes(getRoutes())
+    setAssignments(getRouteAssignments())
+  }, [])
+
+  // 设置/清除机器狗巡逻路线
+  function handleRouteChange(robotId: number, routeId: number | null) {
+    setRouteAssignment(robotId, routeId)
+    setAssignments(getRouteAssignments())
+    toast.success(routeId ? "已设置巡逻路线" : "已清除巡逻路线")
+  }
+
+  // 选中机器狗正在执行的路线
+  const selectedRoute = selected
+    ? (routes.find((r) => r.id === assignments[selected.car_id]) ?? null)
+    : null
 
   // 轮询机器狗位置
   React.useEffect(() => {
@@ -74,12 +112,29 @@ export default function PatrolSchedulePage() {
 
   async function sendCommand(code: CtlCode, label: string) {
     if (!selected) return
+    // 继续 = 释放手动站点等待（发车）
+    if (code === CtlCode.CONTINUE) releaseVehicleStops(selected.car_id)
     setBusy(true)
     try {
       await carsSetStatus(selected.car_id, code)
       toast.success(`机器狗 #${selected.car_id}: ${label}`)
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "指令发送失败")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // 循迹导航：沿分配的巡逻路线开始行驶（taskId 即路线 id）
+  async function handleTrack() {
+    if (!selected || !selectedRoute) return
+    releaseVehicleStops(selected.car_id)
+    setBusy(true)
+    try {
+      await carsRunDemo(selectedRoute.id, selected.car_id)
+      toast.success(`机器狗 #${selected.car_id} 已开始循迹「${selectedRoute.name}」`)
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "循迹指令发送失败")
     } finally {
       setBusy(false)
     }
@@ -120,6 +175,7 @@ export default function PatrolSchedulePage() {
               vehicles={robots}
               onSelect={setSelected}
               selectedId={selected?.car_id}
+              assignedRoute={selectedRoute}
             />
           </CardContent>
         </Card>
@@ -127,7 +183,7 @@ export default function PatrolSchedulePage() {
         {/* 右侧面板 */}
         <div className="flex flex-col gap-5" style={{ minHeight: 0 }}>
           {/* 巡逻路线 */}
-          <RouteCard />
+          <RouteCard routes={routes} />
 
           {/* 机器狗列表 / 详情 */}
           {selected ? (
@@ -137,6 +193,10 @@ export default function PatrolSchedulePage() {
               commands={commands}
               onCommand={sendCommand}
               onBack={() => setSelected(null)}
+              routes={routes}
+              assignedRouteId={assignments[selected.car_id] ?? null}
+              onRouteChange={handleRouteChange}
+              onTrack={handleTrack}
             />
           ) : (
             <RobotList robots={robots} onSelect={setSelected} />
@@ -149,7 +209,7 @@ export default function PatrolSchedulePage() {
 
 /* ==================== Route Card ==================== */
 
-function RouteCard() {
+function RouteCard({ routes }: { routes: Route[] }) {
   return (
     <Card size="sm" className="shrink-0">
       <CardHeader>
@@ -157,18 +217,45 @@ function RouteCard() {
           <RouteIcon className="size-4 text-primary" />
           巡逻路线
         </CardTitle>
-        <CardDescription>已配置的巡逻路线</CardDescription>
+        <CardDescription>共 {routes.length} 条路线</CardDescription>
       </CardHeader>
       <CardContent>
-        <div className="flex flex-col items-center gap-3 py-4 text-center">
-          <div className="flex size-14 items-center justify-center rounded-full bg-muted/20 ring-1 ring-border/10">
-            <RouteIcon className="size-6 text-muted-foreground/15" />
+        {routes.length === 0 ? (
+          <div className="flex flex-col items-center gap-3 py-4 text-center">
+            <div className="flex size-14 items-center justify-center rounded-full bg-muted/20 ring-1 ring-border/10">
+              <RouteIcon className="size-6 text-muted-foreground/15" />
+            </div>
+            <p className="text-xs text-muted-foreground/50">暂无巡逻路线</p>
+            <p className="text-[10px] text-muted-foreground/30">
+              请在高德地图上绘制巡逻路线
+            </p>
           </div>
-          <p className="text-xs text-muted-foreground/50">暂无巡逻路线</p>
-          <p className="text-[10px] text-muted-foreground/30">
-            请在高德地图上绘制巡逻路线
-          </p>
-        </div>
+        ) : (
+          <div className="flex flex-col gap-1.5">
+            {routes.map((r) => (
+              <div
+                key={r.id}
+                className="flex items-center gap-2 rounded-lg border border-border/10 bg-muted/10 px-2.5 py-2"
+              >
+                <span
+                  className="size-2 shrink-0 rounded-full"
+                  style={{ backgroundColor: r.color ?? "#3b82f6" }}
+                />
+                <span className="min-w-0 flex-1 truncate text-xs">{r.name}</span>
+                <span className="font-mono text-[10px] text-muted-foreground/40">
+                  {r.points.length} 点
+                </span>
+              </div>
+            ))}
+            <Link
+              href="/schedule/routes"
+              className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-muted-foreground/50 transition-colors hover:text-foreground"
+            >
+              <ExternalLinkIcon className="size-3" />
+              管理路线
+            </Link>
+          </div>
+        )}
       </CardContent>
     </Card>
   )
@@ -267,13 +354,22 @@ function RobotDetail({
   commands,
   onCommand,
   onBack,
+  routes,
+  assignedRouteId,
+  onRouteChange,
+  onTrack,
 }: {
   robot: CarPosition
   busy: boolean
   commands: { code: CtlCode; label: string; variant: "default" | "secondary" | "destructive" | "ghost"; icon?: React.ComponentType<{ className?: string }> }[]
   onCommand: (code: CtlCode, label: string) => void
   onBack: () => void
+  routes: Route[]
+  assignedRouteId: number | null
+  onRouteChange: (robotId: number, routeId: number | null) => void
+  onTrack: () => void
 }) {
+  const assignedRoute = routes.find((r) => r.id === assignedRouteId) ?? null
   return (
     <div className="flex flex-col gap-5" style={{ minHeight: 0 }}>
       {/* 机器狗信息 */}
@@ -309,6 +405,66 @@ function RobotDetail({
             <InfoRow icon={BotIcon} label="更新">
               {robot.update_time}
             </InfoRow>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* 巡逻路线分配 */}
+      <Card size="sm">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <RouteIcon className="size-4 text-primary" />
+            巡逻路线
+          </CardTitle>
+          <CardDescription>分配后机器狗将沿路线巡逻</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-2">
+          <Select
+            value={assignedRouteId ? String(assignedRouteId) : "none"}
+            onValueChange={(v) => {
+              onRouteChange(robot.car_id, v === "none" ? null : Number(v))
+            }}
+          >
+            <SelectTrigger size="sm" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent align="start">
+              <SelectGroup>
+                <SelectLabel>巡逻路线</SelectLabel>
+                <SelectItem value="none">
+                  <RouteOffIcon className="size-3.5" />
+                  未分配路线
+                </SelectItem>
+                {routes.length > 0 && <SelectSeparator />}
+                {routes.map((r) => (
+                  <SelectItem key={r.id} value={String(r.id)}>
+                    <span
+                      className="size-2 shrink-0 rounded-full"
+                      style={{ backgroundColor: r.color ?? "#3b82f6" }}
+                    />
+                    {r.name}（{r.points.length} 点）
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+          <Link
+            href="/schedule/routes"
+            className="inline-flex items-center gap-1 text-[11px] text-muted-foreground/50 transition-colors hover:text-foreground"
+          >
+            <ExternalLinkIcon className="size-3" />
+            管理路线
+          </Link>
+          {assignedRoute && (
+            <Button
+              size="sm"
+              className="w-full"
+              disabled={busy}
+              onClick={onTrack}
+            >
+              <NavigationIcon data-icon="inline-start" />
+              循迹导航：{assignedRoute.name}
+            </Button>
           )}
         </CardContent>
       </Card>
