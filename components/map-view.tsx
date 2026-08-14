@@ -5,6 +5,7 @@ import AMapLoader from "@amap/amap-jsapi-loader"
 import { useTheme } from "next-themes"
 import type { CarPosition } from "@/lib/api"
 import { getMapThemeConfig } from "@/lib/map-theme"
+import { upgradeTileResolution } from "@/lib/map-tiles"
 
 /* ==================== 高德类型声明 ==================== */
 
@@ -47,36 +48,6 @@ const AMAP_SECURITY_CODE = process.env.NEXT_PUBLIC_AMAP_SECURITY_CODE ?? ""
 const DEFAULT_CENTER: [number, number] = [114.003, 22.602]
 const DEFAULT_ZOOM = 16
 
-/**
- * 强制瓦片高清化：把瓦片 URL 的 scale=1 改为 scale=2（512px 高清瓦片）。
- * 高德仅在 DPR>=2 时请求高清瓦片，非标准缩放（如 1.25/1.333）会用到模糊的 256px 瓦片。
- */
-function upgradeTileResolution(container: HTMLElement | null) {
-  if (!container) return
-
-  // 已存在的瓦片
-  container.querySelectorAll<HTMLImageElement>(".amap-layer-tile img").forEach(upgradeImg)
-
-  // 监听新瓦片插入
-  const observer = new MutationObserver(() => {
-    container.querySelectorAll<HTMLImageElement>(".amap-layer-tile img").forEach(upgradeImg)
-  })
-  observer.observe(container, { childList: true, subtree: true })
-
-  // 存储到容器上以便清理
-  ;(container as HTMLElement & { _tileObserver?: MutationObserver })._tileObserver = observer
-}
-
-/** 将单个瓦片 img 的 scale 参数提升为 2 */
-function upgradeImg(img: HTMLImageElement) {
-  if (img.dataset.hd === "1") return
-  img.dataset.hd = "1"
-  const newSrc = img.src.replace(/scale=\d+/, "scale=2")
-  if (newSrc !== img.src) {
-    img.src = newSrc
-  }
-}
-
 /* ==================== 组件 ==================== */
 
 interface MapViewProps {
@@ -110,6 +81,7 @@ export function MapView({ vehicles }: MapViewProps) {
     let cancelled = false
     // 复制容器引用，避免 cleanup 时 ref 已变化
     const container = containerRef.current
+    let tileObserver: MutationObserver | null = null
 
     window._AMapSecurityConfig = { securityJsCode: AMAP_SECURITY_CODE }
 
@@ -138,7 +110,7 @@ export function MapView({ vehicles }: MapViewProps) {
         // 容器尺寸稳定后强制重算，确保按真实尺寸渲染
         map.on("complete", () => {
           map.resize()
-          upgradeTileResolution(container)
+          tileObserver = upgradeTileResolution(container)
           // 检测高德是否实际使用 WebGL 渲染（WebGL 渲染会创建 canvas，img 瓦片降级则无 canvas）
           setWebglUsed(container.querySelectorAll("canvas").length > 0)
         })
@@ -155,7 +127,7 @@ export function MapView({ vehicles }: MapViewProps) {
 
     return () => {
       cancelled = true
-      ;(container as HTMLElement & { _tileObserver?: MutationObserver } | null)?._tileObserver?.disconnect()
+      tileObserver?.disconnect()
       mapRef.current?.instance?.destroy()
       mapRef.current = null
     }
@@ -233,7 +205,7 @@ export function MapView({ vehicles }: MapViewProps) {
 
     markersRef.current = markers
     map.setFitView(null, false, [80, 80, 80, 80])
-  }, [vehicles])
+  }, [vehicles, webglUsed])
 
   return (
     // 绝对定位填满父级（父级需 relative），避免 flex 中 height:100% 解析为 0 导致渲染模糊

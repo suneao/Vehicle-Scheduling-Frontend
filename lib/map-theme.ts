@@ -29,22 +29,32 @@ const DEFAULTS: MapThemeConfig = {
   dark: "amap://styles/dark",
 }
 
+/** 内存缓存：避免反复解析 localStorage */
+let cache: MapThemeConfig | null = null
+
 export function getMapThemeConfig(): MapThemeConfig {
   if (typeof window === "undefined") return DEFAULTS
+  if (cache) return cache
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return DEFAULTS
+    if (!raw) {
+      cache = DEFAULTS
+      return cache
+    }
     const parsed = JSON.parse(raw) as Partial<MapThemeConfig>
-    return {
+    cache = {
       light: parsed.light ?? DEFAULTS.light,
       dark: parsed.dark ?? DEFAULTS.dark,
     }
+    return cache
   } catch {
-    return DEFAULTS
+    cache = DEFAULTS
+    return cache
   }
 }
 
 export function setMapThemeConfig(config: MapThemeConfig): void {
+  cache = config
   localStorage.setItem(STORAGE_KEY, JSON.stringify(config))
 }
 

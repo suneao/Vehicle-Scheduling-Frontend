@@ -37,6 +37,8 @@ export const ROUTE_COLORS = [
 ]
 
 let nextId = 1
+/** 内存缓存：避免每秒轮询反复解析 localStorage */
+let cache: Route[] | null = null
 
 function seed(): void {
   if (typeof window === "undefined") return
@@ -69,10 +71,14 @@ function isValidPoint(p: unknown): p is [number, number] {
 
 export function getRoutes(): Route[] {
   if (typeof window === "undefined") return []
+  if (cache) return cache
   try {
     seed()
     const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return []
+    if (!raw) {
+      cache = []
+      return cache
+    }
     const parsed = JSON.parse(raw) as Route[]
     // 过滤非法坐标点，避免 NaN 污染地图渲染；path 也一并清理
     const sanitized = parsed
@@ -108,17 +114,21 @@ export function getRoutes(): Route[] {
         }
       })
       .filter((r) => r.points.length >= 2)
-    // 数据被污染时写回清理后的结果（自愈）
-    const dirty = JSON.stringify(sanitized) !== JSON.stringify(parsed)
-    if (dirty) saveRoutes(sanitized)
     nextId = sanitized.reduce((m, r) => Math.max(m, r.id), 0) + 1
-    return sanitized
+    cache = sanitized
+    // 数据被污染时写回清理（自愈）
+    if (JSON.stringify(sanitized) !== JSON.stringify(parsed)) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitized))
+    }
+    return cache
   } catch {
-    return []
+    cache = []
+    return cache
   }
 }
 
 export function saveRoutes(routes: Route[]): void {
+  cache = routes
   localStorage.setItem(STORAGE_KEY, JSON.stringify(routes))
 }
 
@@ -128,7 +138,7 @@ export function addRoute(
   path?: [number, number][],
   mode: "road" | "curve" | "polyline" = "road"
 ): Route {
-  const routes = getRoutes()
+  const routes = [...getRoutes()]
   const route: Route = {
     id: nextId++,
     name: name || `路线 ${nextId - 1}`,

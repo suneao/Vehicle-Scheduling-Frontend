@@ -8,25 +8,36 @@ import { getRouteById } from "@/lib/routes"
 
 const STORAGE_KEY = "route_assignments"
 
+/** 内存缓存：避免频繁解析 localStorage */
+let cache: Record<number, number> | null = null
+
 /** 获取全部路线分配 {vehicleId: routeId} */
 export function getRouteAssignments(): Record<number, number> {
   if (typeof window === "undefined") return {}
+  if (cache) return cache
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    return raw ? (JSON.parse(raw) as Record<number, number>) : {}
+    if (!raw) {
+      cache = {}
+      return cache
+    }
+    cache = JSON.parse(raw) as Record<number, number>
+    return cache
   } catch {
-    return {}
+    cache = {}
+    return cache
   }
 }
 
 /** 设置车辆路线（routeId 传 null 清除） */
 export function setRouteAssignment(vehicleId: number, routeId: number | null): void {
-  const all = getRouteAssignments()
+  const all = { ...getRouteAssignments() }
   if (routeId === null) {
     delete all[vehicleId]
   } else {
     all[vehicleId] = routeId
   }
+  cache = all
   localStorage.setItem(STORAGE_KEY, JSON.stringify(all))
 }
 

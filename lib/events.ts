@@ -24,6 +24,8 @@ export interface ScheduleEvent {
 const STORAGE_KEY = "schedule_events"
 
 let nextId = 1
+/** 内存缓存：避免频繁解析 localStorage */
+let cache: ScheduleEvent[] | null = null
 
 function seed(): void {
   if (typeof window === "undefined") return
@@ -43,24 +45,31 @@ function seed(): void {
 
 export function getEvents(): ScheduleEvent[] {
   if (typeof window === "undefined") return []
+  if (cache) return cache
   try {
     seed()
     const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return []
+    if (!raw) {
+      cache = []
+      return cache
+    }
     const events = JSON.parse(raw) as ScheduleEvent[]
     nextId = events.reduce((m, e) => Math.max(m, e.id), 0) + 1
+    cache = events
     return events
   } catch {
-    return []
+    cache = []
+    return cache
   }
 }
 
 export function saveEvents(events: ScheduleEvent[]): void {
+  cache = events
   localStorage.setItem(STORAGE_KEY, JSON.stringify(events))
 }
 
 export function addEvent(event: Omit<ScheduleEvent, "id">): ScheduleEvent {
-  const events = getEvents()
+  const events = [...getEvents()]
   const item: ScheduleEvent = { ...event, id: nextId++ }
   events.push(item)
   saveEvents(events)
