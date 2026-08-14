@@ -1,127 +1,31 @@
 "use client"
 
 import * as React from "react"
-import AMapLoader from "@amap/amap-jsapi-loader"
 import { useTheme } from "next-themes"
 import type { CarPosition } from "@/lib/api"
 import type { Route } from "@/lib/routes"
-import { getMapThemeConfig } from "@/lib/map-theme"
-import { pointMarkerHtml, endMarkerHtml, stopMarkerHtml } from "@/lib/map-markers"
+import {
+  type AMapMarkerInstance,
+  type AMapPolylineInstance,
+  type AMapNamespace,
+  type MapOverlay,
+  type DrivingResult,
+  type MapEntry,
+  loadAmap,
+  createAmapMap,
+  resolveMapStyle,
+  detectWebglUsed,
+  DEFAULT_CENTER,
+  DEFAULT_ZOOM,
+} from "@/lib/amap"
+import { pointMarkerHtml, endMarkerHtml, stopMarkerHtml, vehicleMarkerSvg, robotMarkerSvg } from "@/lib/map-markers"
 import { upgradeTileResolution } from "@/lib/map-tiles"
+import { batteryMarkerColor } from "@/lib/battery"
+import { ON_ROUTE_THRESHOLD, projectToPath, splitPathAt } from "@/lib/route-geometry"
 import { Button } from "@/components/ui/button"
 import { LocateFixedIcon, MoveIcon, CrosshairIcon } from "lucide-react"
 
-/* ==================== 高德类型声明 ==================== */
 
-/** 地图实例最小类型 */
-interface AMapMapInstance {
-  destroy: () => void
-  resize: () => void
-  setFitView: (overlays: unknown[] | null, immediately: boolean, padding: number[]) => void
-  setMapStyle: (style: string) => void
-  addControl: (control: unknown) => void
-  on: (event: string, handler: () => void) => void
-  getZoom: () => number
-  setZoom: (zoom: number) => void
-  setCenter: (center: [number, number]) => void
-  setRotation: (deg: number, immediate?: boolean) => void
-  setPitch: (pitch: number) => void
-}
-
-/** 标记实例最小类型 */
-interface AMapMarkerInstance {
-  setMap: (map: AMapMapInstance | null) => void
-}
-
-/** AMap 命名空间最小类型 */
-interface AMapNamespace {
-  Map: new (container: HTMLElement, opts: Record<string, unknown>) => AMapMapInstance
-  Marker: new (opts: Record<string, unknown>) => AMapMarkerInstance
-  Polyline: new (opts: Record<string, unknown>) => {
-    setMap: (map: AMapMapInstance | null) => void
-  }
-  Pixel: new (x: number, y: number) => unknown
-  Scale: new () => unknown
-  ToolBar: new (opts: Record<string, unknown>) => unknown
-  Driving: new (opts: Record<string, unknown>) => {
-    search: (
-      origin: [number, number],
-      dest: [number, number],
-      callback: (status: string, result: DrivingResult) => void
-    ) => void
-  }
-  plugin: (name: string, callback: () => void) => void
-}
-
-/** 地图覆盖物（标记/折线）最小类型 */
-interface MapOverlay {
-  setMap: (map: AMapMapInstance | null) => void
-}
-
-/** 驾车规划结果中的坐标（LngLat 或 [lng, lat]） */
-type AmapLngLat = [number, number] | { getLng(): number; getLat(): number }
-
-/** 驾车规划返回结构 */
-interface DrivingResult {
-  routes?: Array<{ steps?: Array<{ path?: AmapLngLat[] }> }>
-}
-
-const AMAP_KEY = process.env.NEXT_PUBLIC_AMAP_KEY ?? ""
-const AMAP_SECURITY_CODE = process.env.NEXT_PUBLIC_AMAP_SECURITY_CODE ?? ""
-
-const DEFAULT_CENTER: [number, number] = [114.003, 22.602]
-const DEFAULT_ZOOM = 16
-
-/** 视为“已在路线上”的距离阈值（约 33 米） */
-const ON_ROUTE_THRESHOLD = 3e-4
-
-/** 路径上距离某点最近的位置（返回投影点、所在段索引与距离） */
-function projectToPath(
-  path: [number, number][],
-  pos: [number, number]
-): { index: number; point: [number, number]; distance: number } {
-  if (path.length === 0) {
-    return { index: 0, point: pos, distance: Infinity }
-  }
-  let bestIdx = 0
-  let bestPoint: [number, number] = path[0]
-  let bestD = Infinity
-  for (let i = 0; i < path.length - 1; i++) {
-    const a = path[i]
-    const b = path[i + 1]
-    const dx = b[0] - a[0]
-    const dy = b[1] - a[1]
-    const len2 = dx * dx + dy * dy
-    const t =
-      len2 === 0
-        ? 0
-        : Math.max(
-            0,
-            Math.min(1, ((pos[0] - a[0]) * dx + (pos[1] - a[1]) * dy) / len2)
-          )
-    const point: [number, number] = [a[0] + t * dx, a[1] + t * dy]
-    const d = Math.hypot(pos[0] - point[0], pos[1] - point[1])
-    if (d < bestD) {
-      bestD = d
-      bestIdx = i
-      bestPoint = point
-    }
-  }
-  return { index: bestIdx, point: bestPoint, distance: bestD }
-}
-
-/** 在最近投影点处把路径拆成「已行驶」和「未行驶」两段 */
-function splitPathAt(
-  path: [number, number][],
-  pos: [number, number]
-): { before: [number, number][]; after: [number, number][] } {
-  if (path.length < 2) return { before: path, after: [] }
-  const { index, point } = projectToPath(path, pos)
-  return {
-    before: [...path.slice(0, index + 1), point],
-    after: [point, ...path.slice(index + 1)],
-  }
-}
 
 interface ScheduleMapProps {
   vehicles: CarPosition[]
@@ -129,15 +33,24 @@ interface ScheduleMapProps {
   selectedId?: number
   /** 选中车辆/机器狗正在执行的路线（用于地图上展示） */
   assignedRoute?: Route | null
+  /** 在路线上时的起始方式：start = 导航到起点；current = 从当前位置开始 */
+  startMode: "start" | "current"
+  onStartModeChange: (mode: "start" | "current") => void
+  /** 常驻显示的全部巡逻路线（半透明底图，供机器狗调度页） */
+  overviewRoutes?: Route[]
 }
 
-export function ScheduleMap({ vehicles, onSelect, selectedId, assignedRoute }: ScheduleMapProps) {
+export function ScheduleMap({ vehicles, onSelect, selectedId, assignedRoute, startMode, onStartModeChange, overviewRoutes }: ScheduleMapProps) {
   const { resolvedTheme } = useTheme()
   const containerRef = React.useRef<HTMLDivElement>(null)
-  const mapRef = React.useRef<{ instance: AMapMapInstance; AMap: AMapNamespace } | null>(null)
+  const mapRef = React.useRef<MapEntry | null>(null)
   const markersRef = React.useRef<AMapMarkerInstance[]>([])
   const routeOverlaysRef = React.useRef<MapOverlay[]>([])
-  const navOverlaysRef = React.useRef<MapOverlay[]>([])
+  const overviewOverlaysRef = React.useRef<MapOverlay[]>([])
+  const routeProgressRef = React.useRef<AMapPolylineInstance[]>([])
+  const routeProgressKeyRef = React.useRef<string>("")
+  const navProgressRef = React.useRef<AMapPolylineInstance[]>([])
+  const navProgressKeyRef = React.useRef<string>("")
   const routeFitKeyRef = React.useRef<string | null>(null)
   const navKeyRef = React.useRef<string | null>(null)
   const onSelectRef = React.useRef(onSelect)
@@ -145,8 +58,6 @@ export function ScheduleMap({ vehicles, onSelect, selectedId, assignedRoute }: S
   const [error, setError] = React.useState<string | null>(null)
   // 视角模式：follow = 跟随选中车辆/自动囊括所有车辆；free = 自由拖动
   const [mode, setMode] = React.useState<"follow" | "free">("follow")
-  // 在路线上时的起始方式：start = 从起点开始；current = 从当前位置开始
-  const [startMode, setStartMode] = React.useState<"start" | "current">("start")
   // 规划出的导航路径结果（异步回调写入）；key 用于区分当前选中对象/路线
   const [resolvedNav, setResolvedNav] = React.useState<{
     key: string
@@ -181,12 +92,10 @@ export function ScheduleMap({ vehicles, onSelect, selectedId, assignedRoute }: S
       ? resolvedNav.path
       : fallbackNavPath
 
-  const mapStyle = React.useMemo(() => {
-    const cfg = getMapThemeConfig()
-    // WebGL 不可用时地图固定亮色主题，忽略暗色配置
-    if (webglUsed === false) return cfg.light
-    return resolvedTheme === "dark" ? cfg.dark : cfg.light
-  }, [resolvedTheme, webglUsed])
+  const mapStyle = React.useMemo(
+    () => resolveMapStyle(resolvedTheme, webglUsed),
+    [resolvedTheme, webglUsed]
+  )
 
   // 主初始化 effect 需要初始 mapStyle，但不随主题重建地图：用 ref 传递
   const mapStyleRef = React.useRef(mapStyle)
@@ -204,29 +113,18 @@ export function ScheduleMap({ vehicles, onSelect, selectedId, assignedRoute }: S
     let cancelled = false
     const container = containerRef.current
     let tileObserver: MutationObserver | null = null
-    window._AMapSecurityConfig = { securityJsCode: AMAP_SECURITY_CODE }
 
-    AMapLoader.load({ key: AMAP_KEY, version: "2.0", plugins: ["AMap.Scale", "AMap.Driving"] })
+    loadAmap(["AMap.Scale", "AMap.Driving"])
       .then((AMap: AMapNamespace) => {
         if (cancelled || !container) return
 
-        const map = new AMap.Map(container, {
-          // viewMode 3D 支持地图旋转，pitch 0 保持平面俯视（视觉等同 2D）
-          viewMode: "3D",
-          pitch: 0,
-          rotation: 0,
-          zoom: DEFAULT_ZOOM,
-          center: DEFAULT_CENTER,
-          mapStyle: mapStyleRef.current,
-          resizeEnable: true,
-          devicePixelRatio: 2,
-        })
+        // viewMode 3D 支持地图旋转，pitch 0 保持平面俯视（视觉等同 2D）
+        const map = createAmapMap(AMap, container, mapStyleRef.current)
         map.addControl(new AMap.Scale())
         map.on("complete", () => {
           map.resize()
           tileObserver = upgradeTileResolution(container)
-          // 检测高德是否实际使用 WebGL 渲染（WebGL 渲染会创建 canvas，img 瓦片降级则无 canvas）
-          setWebglUsed(container.querySelectorAll("canvas").length > 0)
+          setWebglUsed(detectWebglUsed(container))
         })
         mapRef.current = { instance: map, AMap }
         setLoading(false)
@@ -251,7 +149,40 @@ export function ScheduleMap({ vehicles, onSelect, selectedId, assignedRoute }: S
     mapRef.current?.instance?.setMapStyle(mapStyle)
   }, [mapStyle])
 
-  // 选中车辆/机器狗的执行路线：带描边 + 进度高亮（已行驶更浅，实时更新）
+  // 常驻显示全部巡逻路线（半透明底图，供机器狗调度页）
+  React.useEffect(() => {
+    const entry = mapRef.current
+    if (!entry) return
+    const { instance: map, AMap } = entry
+
+    for (const o of overviewOverlaysRef.current) o.setMap(null)
+    overviewOverlaysRef.current = []
+
+    if (!overviewRoutes || overviewRoutes.length === 0) return
+
+    const isValidPoint = (p: [number, number]) =>
+      Number.isFinite(p[0]) && Number.isFinite(p[1])
+
+    for (const route of overviewRoutes) {
+      const points = (
+        route.path && route.path.length >= 2 ? route.path : route.points
+      ).filter(isValidPoint)
+      if (points.length < 2) continue
+      const poly = new AMap.Polyline({
+        path: points,
+        strokeColor: route.color ?? "#3b82f6",
+        strokeWeight: 4,
+        strokeOpacity: 0.3,
+        strokeStyle: "solid",
+        lineJoin: "round",
+        lineCap: "round",
+      })
+      poly.setMap(map)
+      overviewOverlaysRef.current.push(poly)
+    }
+  }, [overviewRoutes])
+
+  // 选中路线的静态部分：描边 + 起/终/站点标记（只在路线/主题变化时重建）
   React.useEffect(() => {
     const entry = mapRef.current
     if (!entry) return
@@ -290,40 +221,6 @@ export function ScheduleMap({ vehicles, onSelect, selectedId, assignedRoute }: S
     casing.setMap(map)
     routeOverlaysRef.current.push(casing)
 
-    // 主色线：按车辆进度分段（已行驶浅、未行驶实）
-    const drawSegment = (path: [number, number][], opacity: number) => {
-      if (path.length < 2) return
-      const poly = new AMap.Polyline({
-        path,
-        strokeColor: color,
-        strokeWeight: 5,
-        strokeOpacity: opacity,
-        strokeStyle: "solid",
-        lineJoin: "round",
-        lineCap: "round",
-        showDir: true,
-      })
-      poly.setMap(map)
-      routeOverlaysRef.current.push(poly)
-    }
-
-    const v = vehicles.find((item) => item.car_id === selectedId)
-    const proj = v ? projectToPath(points, [v.x, v.y]) : null
-    if (v && proj && proj.distance <= ON_ROUTE_THRESHOLD) {
-      // 在路线上：按已行驶/未行驶分段
-      const { before, after } = splitPathAt(points, [v.x, v.y])
-      if (startMode === "start") {
-        drawSegment(before, 0.3) // 已行驶（浅）
-        drawSegment(after, 0.9) // 未行驶（实）
-      } else {
-        drawSegment(before, 0.15) // 起点前部分（幽灵，表示从当前位置开始）
-        drawSegment(after, 0.9) // 未行驶（实）
-      }
-    } else {
-      // 不在路线上：整条路线实色（导航线另行显示进度）
-      drawSegment(points, 0.9)
-    }
-
     // 起点（实心圆 + 起）与终点（白色圆环 + 终）标记
     const startMarker = new AMap.Marker({
       position: points[0],
@@ -358,7 +255,89 @@ export function ScheduleMap({ vehicles, onSelect, selectedId, assignedRoute }: S
         routeOverlaysRef.current.push(stopMarker)
       })
     }
-  }, [assignedRoute, resolvedTheme, webglUsed, vehicles, selectedId, startMode])
+  }, [assignedRoute, resolvedTheme, webglUsed])
+
+  // 进度分段（已行驶浅/未行驶实）：随车辆移动原地更新，避免每秒重建闪烁
+  React.useEffect(() => {
+    const entry = mapRef.current
+    if (!entry) return
+    const { instance: map, AMap } = entry
+
+    const routeKey = assignedRoute
+      ? `${assignedRoute.id}:${assignedRoute.color ?? ""}`
+      : "none"
+    const isValidPoint = (p: [number, number]) =>
+      Number.isFinite(p[0]) && Number.isFinite(p[1])
+    const points = assignedRoute
+      ? (assignedRoute.path && assignedRoute.path.length >= 2
+          ? assignedRoute.path
+          : assignedRoute.points
+        ).filter(isValidPoint)
+      : []
+    const color = assignedRoute?.color ?? "#3b82f6"
+
+    let before: [number, number][] | null = null
+    let after: [number, number][] = []
+    let beforeOpacity = 0.3
+    const afterOpacity = 0.9
+
+    if (points.length >= 2) {
+      const v = vehicles.find((item) => item.car_id === selectedId)
+      const proj = v ? projectToPath(points, [v.x, v.y]) : null
+      if (v && proj && proj.distance <= ON_ROUTE_THRESHOLD) {
+        const split = splitPathAt(points, [v.x, v.y])
+        before = split.before
+        after = split.after
+        beforeOpacity = startMode === "start" ? 0.3 : 0.15
+      } else {
+        before = null
+        after = points
+      }
+    }
+
+    // 路线变化时重建进度线（用整条路线作为初始有效路径，避免 AMap 报空路径）
+    if (routeProgressKeyRef.current !== routeKey) {
+      routeProgressKeyRef.current = routeKey
+      for (const o of routeProgressRef.current) o.setMap(null)
+      routeProgressRef.current = []
+      if (points.length >= 2) {
+        for (let i = 0; i < 2; i++) {
+          const poly = new AMap.Polyline({
+            path: points,
+            strokeColor: color,
+            strokeWeight: 5,
+            strokeOpacity: 0.9,
+            strokeStyle: "solid",
+            lineJoin: "round",
+            lineCap: "round",
+            showDir: true,
+          })
+          poly.setMap(map)
+          routeProgressRef.current.push(poly)
+        }
+      }
+    }
+
+    const [beforePoly, afterPoly] = routeProgressRef.current
+    if (beforePoly) {
+      if (before && before.length >= 2) {
+        beforePoly.setPath(before)
+        beforePoly.setOptions({ strokeOpacity: beforeOpacity })
+        beforePoly.setMap(map)
+      } else {
+        beforePoly.setMap(null)
+      }
+    }
+    if (afterPoly) {
+      if (after && after.length >= 2) {
+        afterPoly.setPath(after)
+        afterPoly.setOptions({ strokeOpacity: afterOpacity })
+        afterPoly.setMap(map)
+      } else {
+        afterPoly.setMap(null)
+      }
+    }
+  }, [assignedRoute, vehicles, selectedId, startMode])
 
   // 导航到路线起点：调用高德驾车路径规划 API，结果写入 resolvedNav（仅异步回调）
   React.useEffect(() => {
@@ -401,56 +380,83 @@ export function ScheduleMap({ vehicles, onSelect, selectedId, assignedRoute }: S
     }
   }, [vehicles, selectedId, assignedRoute, navKey, onRoute, selectedVehicle])
 
-  // 渲染导航线：按车辆当前位置拆分已行驶（浅）/未行驶（实虚线），实时更新
+  // 渲染导航线：按车辆当前位置拆分已行驶（浅）/未行驶（实虚线），原地更新避免闪烁
   React.useEffect(() => {
     const entry = mapRef.current
     if (!entry) return
     const { instance: map, AMap } = entry
 
-    for (const o of navOverlaysRef.current) o.setMap?.(null)
-    navOverlaysRef.current = []
-
-    if (!effectiveNavPath || effectiveNavPath.length < 2) return
-
+    const navPath =
+      effectiveNavPath && effectiveNavPath.length >= 2 ? effectiveNavPath : null
     const v = vehicles.find((item) => item.car_id === selectedId)
-    if (!v) return
 
     const casingColor =
       webglUsed === false || resolvedTheme !== "dark"
         ? "rgba(15,23,42,0.35)"
         : "rgba(255,255,255,0.35)"
 
-    const drawNavLine = (seg: [number, number][], opacity: number) => {
-      if (seg.length < 2) return
-      const casing = new AMap.Polyline({
-        path: seg,
-        strokeColor: casingColor,
-        strokeWeight: 7,
-        strokeOpacity: 1,
-        strokeStyle: "solid",
-        lineJoin: "round",
-        lineCap: "round",
-      })
-      casing.setMap(map)
-      navOverlaysRef.current.push(casing)
-      const line = new AMap.Polyline({
-        path: seg,
-        strokeColor: "#64748b",
-        strokeWeight: 4,
-        strokeOpacity: opacity,
-        strokeStyle: "dashed",
-        strokeDasharray: [8, 6],
-        lineJoin: "round",
-        lineCap: "round",
-      })
-      line.setMap(map)
-      navOverlaysRef.current.push(line)
+    const progressKey = `${navKey}:${
+      navPath ? (resolvedNav?.key === navKey ? "resolved" : "fallback") : "none"
+    }`
+
+    let before: [number, number][] | null = null
+    let after: [number, number][] = []
+    if (navPath && v) {
+      const split = splitPathAt(navPath, [v.x, v.y])
+      before = split.before
+      after = split.after
     }
 
-    const { before, after } = splitPathAt(effectiveNavPath, [v.x, v.y])
-    drawNavLine(before, 0.35) // 已行驶（浅）
-    drawNavLine(after, 0.85) // 未行驶（实）
-  }, [effectiveNavPath, vehicles, selectedId, assignedRoute, resolvedTheme, webglUsed])
+    // 选中对象/导航类型变化时重建（用导航路径作为初始有效路径）
+    if (navProgressKeyRef.current !== progressKey) {
+      navProgressKeyRef.current = progressKey
+      for (const o of navProgressRef.current) o.setMap(null)
+      navProgressRef.current = []
+      if (navPath) {
+        const make = (dashed: boolean) => {
+          const poly = new AMap.Polyline({
+            path: navPath,
+            strokeColor: dashed ? "#64748b" : casingColor,
+            strokeWeight: dashed ? 4 : 7,
+            strokeOpacity: 0.85,
+            strokeStyle: dashed ? "dashed" : "solid",
+            ...(dashed ? { strokeDasharray: [8, 6] } : {}),
+            lineJoin: "round",
+            lineCap: "round",
+          })
+          poly.setMap(map)
+          navProgressRef.current.push(poly)
+          return poly
+        }
+        make(false) // before 描边
+        make(true) // before 虚线
+        make(false) // after 描边
+        make(true) // after 虚线
+      }
+    }
+
+    const [beforeCasing, beforeLine, afterCasing, afterLine] = navProgressRef.current
+
+    const apply = (
+      poly: AMapPolylineInstance | undefined,
+      seg: [number, number][] | null,
+      opacity: number
+    ) => {
+      if (!poly) return
+      if (seg && seg.length >= 2) {
+        poly.setPath(seg)
+        poly.setOptions({ strokeOpacity: opacity })
+        poly.setMap(map)
+      } else {
+        poly.setMap(null)
+      }
+    }
+
+    apply(beforeCasing, before, 1)
+    apply(beforeLine, before, 0.35)
+    apply(afterCasing, after, 1)
+    apply(afterLine, after, 0.85)
+  }, [effectiveNavPath, vehicles, selectedId, navKey, resolvedNav, webglUsed, resolvedTheme])
 
   // 视角控制：跟随模式自动调整地图视角
   React.useEffect(() => {
@@ -528,16 +534,14 @@ export function ScheduleMap({ vehicles, onSelect, selectedId, assignedRoute }: S
       : "size-7 border border-border bg-background p-0! text-foreground hover:bg-foreground hover:text-background"
   }
 
-  // 更新车辆标记
+  // 更新车辆标记（先绘制新标记、再移除旧标记，避免每秒重建闪烁）
   React.useEffect(() => {
     const entry = mapRef.current
     if (!entry) return
     const { instance: map, AMap } = entry
 
-    for (const m of markersRef.current) m.setMap(null)
+    const oldMarkers = markersRef.current
     markersRef.current = []
-
-    if (vehicles.length === 0) return
 
     const markers: AMapMarkerInstance[] = []
 
@@ -546,27 +550,18 @@ export function ScheduleMap({ vehicles, onSelect, selectedId, assignedRoute }: S
       const hasAngle = v.angle != null
       const isSelected = v.car_id === selectedId
       // WebGL 不可用时地图降级为亮色渲染，marker 固定用亮色主题主色（近黑，非黄色）以保证可见
+      // 低电量优先用黄/红标记（选中态仍用绿色突出选中）
+      const batteryColor = batteryMarkerColor(v.battery)
       const base = isSelected
         ? "#22c55e"
-        : webglUsed === false
-          ? "#212121"
-          : "var(--color-primary,#f59e0b)"
+        : batteryColor ?? (webglUsed === false ? "#212121" : "var(--color-primary,#f59e0b)")
 
       const el = document.createElement("div")
       el.style.cssText = "display:flex;flex-direction:column;align-items:center;cursor:pointer;"
       el.innerHTML = `
-        <svg width="${isSelected ? 20 : 16}" height="${isSelected ? 25 : 20}" viewBox="-2 -2 20 25" style="
-          overflow:visible;
-          /* 水滴尖端指示车辆朝向（地图不旋转，marker 直接指示方向） */
-          transform:${hasAngle ? `rotate(${v.angle}deg)` : "none"};
-          transform-box:fill-box;
-          filter:drop-shadow(0 1px 2px rgba(0,0,0,0.25));
-        ">
-          <path d="M8 1 C 12 6.5 15 10 15 13 A 7 7 0 1 1 1 13 C 1 10 4 6.5 8 1 Z"
-            fill="${base}" stroke="#fff" stroke-width="1.5"
-            opacity="${alive || isSelected ? 1 : 0.6}" />
-          <circle cx="8" cy="13" r="3.5" fill="none" stroke="#fff" stroke-width="1.5" />
-        </svg>
+        ${v.kind === "robot"
+          ? robotMarkerSvg({ color: base, angle: v.angle, alive, selected: isSelected })
+          : vehicleMarkerSvg({ color: base, angle: v.angle, alive, selected: isSelected })}
         <span style="
           margin-top:4px;font-size:10px;font-weight:600;
           font-family:monospace;color:#333;
@@ -602,6 +597,9 @@ export function ScheduleMap({ vehicles, onSelect, selectedId, assignedRoute }: S
     }
 
     markersRef.current = markers
+
+    // 新标记已绘制后，再移除旧标记
+    for (const m of oldMarkers) m.setMap(null)
   }, [vehicles, selectedId, webglUsed])
 
   // 容器尺寸变化时重算地图渲染（flex 布局调整后保持高清）
@@ -627,7 +625,7 @@ export function ScheduleMap({ vehicles, onSelect, selectedId, assignedRoute }: S
           <Button
             variant="outline"
             size="sm"
-            onClick={() => setStartMode("start")}
+            onClick={() => onStartModeChange("start")}
             className={modeBtnClass(startMode === "start", lightMap)}
           >
             从起点开始
@@ -635,7 +633,7 @@ export function ScheduleMap({ vehicles, onSelect, selectedId, assignedRoute }: S
           <Button
             variant="outline"
             size="sm"
-            onClick={() => setStartMode("current")}
+            onClick={() => onStartModeChange("current")}
             className={modeBtnClass(startMode === "current", lightMap)}
           >
             从当前位置开始

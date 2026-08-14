@@ -1,52 +1,20 @@
 "use client"
 
 import * as React from "react"
-import AMapLoader from "@amap/amap-jsapi-loader"
 import { useTheme } from "next-themes"
 import type { CarPosition } from "@/lib/api"
-import { getMapThemeConfig } from "@/lib/map-theme"
+import {
+  type AMapMarkerInstance,
+  type AMapNamespace,
+  type MapEntry,
+  loadAmap,
+  createAmapMap,
+  resolveMapStyle,
+  detectWebglUsed,
+} from "@/lib/amap"
 import { upgradeTileResolution } from "@/lib/map-tiles"
-
-/* ==================== 高德类型声明 ==================== */
-
-declare global {
-  interface Window {
-    _AMapSecurityConfig: { securityJsCode: string }
-  }
-}
-
-/** 地图实例最小类型 */
-interface AMapMapInstance {
-  destroy: () => void
-  resize: () => void
-  setFitView: (overlays: unknown[] | null, immediately: boolean, padding: number[]) => void
-  setMapStyle: (style: string) => void
-  addControl: (control: unknown) => void
-  on: (event: string, handler: () => void) => void
-}
-
-/** 标记实例最小类型 */
-interface AMapMarkerInstance {
-  setMap: (map: AMapMapInstance | null) => void
-}
-
-/** AMap 命名空间最小类型 */
-interface AMapNamespace {
-  Map: new (container: HTMLElement, opts: Record<string, unknown>) => AMapMapInstance
-  Marker: new (opts: Record<string, unknown>) => AMapMarkerInstance
-  Pixel: new (x: number, y: number) => unknown
-  Scale: new () => unknown
-  ToolBar: new (opts: Record<string, unknown>) => unknown
-}
-
-/* ==================== 配置 ==================== */
-
-const AMAP_KEY = process.env.NEXT_PUBLIC_AMAP_KEY ?? ""
-const AMAP_SECURITY_CODE = process.env.NEXT_PUBLIC_AMAP_SECURITY_CODE ?? ""
-
-// 南方科技大学
-const DEFAULT_CENTER: [number, number] = [114.003, 22.602]
-const DEFAULT_ZOOM = 16
+import { vehicleMarkerSvg, robotMarkerSvg } from "@/lib/map-markers"
+import { batteryMarkerColor } from "@/lib/battery"
 
 /* ==================== 组件 ==================== */
 
@@ -57,19 +25,17 @@ interface MapViewProps {
 export function MapView({ vehicles }: MapViewProps) {
   const { resolvedTheme } = useTheme()
   const containerRef = React.useRef<HTMLDivElement>(null)
-  const mapRef = React.useRef<{ instance: AMapMapInstance; AMap: AMapNamespace } | null>(null)
+  const mapRef = React.useRef<MapEntry | null>(null)
   const markersRef = React.useRef<AMapMarkerInstance[]>([])
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
   // WebGL 是否被高德实际使用：false 时地图降级为 img 瓦片渲染，主题无法切换，强制亮色
   const [webglUsed, setWebglUsed] = React.useState<boolean | null>(null)
 
-  const mapStyle = React.useMemo(() => {
-    const cfg = getMapThemeConfig()
-    // WebGL 不可用时地图固定亮色主题，忽略暗色配置
-    if (webglUsed === false) return cfg.light
-    return resolvedTheme === "dark" ? cfg.dark : cfg.light
-  }, [resolvedTheme, webglUsed])
+  const mapStyle = React.useMemo(
+    () => resolveMapStyle(resolvedTheme, webglUsed),
+    [resolvedTheme, webglUsed]
+  )
 
   // 主初始化 effect 需要初始 mapStyle，但不随主题重建地图：用 ref 传递
   const mapStyleRef = React.useRef(mapStyle)
@@ -83,26 +49,12 @@ export function MapView({ vehicles }: MapViewProps) {
     const container = containerRef.current
     let tileObserver: MutationObserver | null = null
 
-    window._AMapSecurityConfig = { securityJsCode: AMAP_SECURITY_CODE }
-
-    AMapLoader.load({
-      key: AMAP_KEY,
-      version: "2.0",
-      plugins: ["AMap.Scale", "AMap.ToolBar"],
-    })
+    loadAmap(["AMap.Scale", "AMap.ToolBar"])
       .then((AMap: AMapNamespace) => {
         if (cancelled || !container) return
 
-        const map = new AMap.Map(container, {
-          // WebGL 渲染：纹理线性过滤比 img 瓦片放大更平滑，缓解高分屏模糊
-          viewMode: "3D",
-          pitch: 0,
-          zoom: DEFAULT_ZOOM,
-          center: DEFAULT_CENTER,
-          mapStyle: mapStyleRef.current,
-          resizeEnable: true,
-          devicePixelRatio: 2,
-        })
+        // WebGL 渲染：纹理线性过滤比 img 瓦片放大更平滑，缓解高分屏模糊
+        const map = createAmapMap(AMap, container, mapStyleRef.current)
 
         map.addControl(new AMap.Scale())
         map.addControl(new AMap.ToolBar({ position: "RT" }))
@@ -112,7 +64,7 @@ export function MapView({ vehicles }: MapViewProps) {
           map.resize()
           tileObserver = upgradeTileResolution(container)
           // 检测高德是否实际使用 WebGL 渲染（WebGL 渲染会创建 canvas，img 瓦片降级则无 canvas）
-          setWebglUsed(container.querySelectorAll("canvas").length > 0)
+          setWebglUsed(detectWebglUsed(container))
         })
 
         mapRef.current = { instance: map, AMap }
@@ -165,25 +117,19 @@ export function MapView({ vehicles }: MapViewProps) {
 
     for (const v of vehicles) {
       const alive = v.speed > 0
-      const hasAngle = v.angle != null
 
       const el = document.createElement("div")
       el.style.cssText = "display:flex;flex-direction:column;align-items:center;"
       // WebGL 不可用时地图降级为亮色渲染，marker 固定用亮色主题主色（近黑，非黄色）以保证可见
+      // 低电量优先用黄/红标记
+      const batteryColor = batteryMarkerColor(v.battery)
       const dropColor =
-        webglUsed === false ? "#212121" : "var(--color-primary,#f59e0b)"
+        batteryColor ??
+        (webglUsed === false ? "#212121" : "var(--color-primary,#f59e0b)")
       el.innerHTML = `
-        <svg width="16" height="20" viewBox="-2 -2 20 25" style="
-          overflow:visible;
-          transform:${hasAngle ? `rotate(${v.angle}deg)` : "none"};
-          transform-box:fill-box;
-          filter:drop-shadow(0 1px 2px rgba(0,0,0,0.25));
-        ">
-          <path d="M8 1 C 12 6.5 15 10 15 13 A 7 7 0 1 1 1 13 C 1 10 4 6.5 8 1 Z"
-            fill="${dropColor}" stroke="#fff" stroke-width="1.5"
-            opacity="${alive ? 1 : 0.6}" />
-          <circle cx="8" cy="13" r="3.5" fill="none" stroke="#fff" stroke-width="1.5" />
-        </svg>
+        ${v.kind === "robot"
+          ? robotMarkerSvg({ color: dropColor, angle: v.angle, alive })
+          : vehicleMarkerSvg({ color: dropColor, angle: v.angle, alive })}
         <span style="
           margin-top:3px;font-size:10px;font-weight:600;
           font-family:monospace;color:#333;

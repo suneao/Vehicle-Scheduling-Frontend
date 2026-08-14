@@ -17,6 +17,7 @@ import {
   setRouteAssignment,
 } from "@/lib/route-assignments"
 import { releaseVehicleStops } from "@/lib/virtual-vehicles"
+import { MonitorPreviewCard } from "@/components/monitor-preview-card"
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -42,8 +43,12 @@ import {
   RouteIcon,
   RouteOffIcon,
   ExternalLinkIcon,
+  BatteryIcon,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { batteryDotClass, batteryDotGlow } from "@/lib/battery"
+import { ON_ROUTE_THRESHOLD, projectToPath } from "@/lib/route-geometry"
+import { InfoRow } from "@/components/info-row"
 
 const ScheduleMap = dynamic(
   () => import("@/components/schedule-map").then((m) => m.ScheduleMap),
@@ -62,13 +67,17 @@ export default function VehicleSchedulePage() {
   const [vehicles, setVehicles] = React.useState<CarPosition[]>([])
   const [selected, setSelected] = React.useState<CarPosition | null>(null)
   const [busy, setBusy] = React.useState(false)
-  const [routes, setRoutes] = React.useState<Route[]>([])
-  const [assignments, setAssignments] = React.useState<Record<number, number>>({})
+  const [startMode, setStartMode] = React.useState<"start" | "current">("start")
+  const [routes] = React.useState<Route[]>(() => getRoutes())
+  const [assignments, setAssignments] = React.useState<Record<number, number>>(
+    () => getRouteAssignments()
+  )
 
-  React.useEffect(() => {
-    setRoutes(getRoutes())
-    setAssignments(getRouteAssignments())
-  }, [])
+  // 选中车辆/取消选中：切换时重置循迹起始方式
+  function handleSelect(vehicle: CarPosition | null) {
+    setStartMode("start")
+    setSelected(vehicle)
+  }
 
   // 设置/清除车辆路线
   function handleRouteChange(vehicleId: number, routeId: number | null) {
@@ -82,6 +91,11 @@ export default function VehicleSchedulePage() {
     ? (routes.find((r) => r.id === assignments[selected.car_id]) ?? null)
     : null
 
+  // 选中车辆是否仍在线（仍在最新位置列表里）
+  const selectedOnline = selected
+    ? vehicles.some((v) => v.car_id === selected.car_id)
+    : false
+
   // 轮询车辆位置
   React.useEffect(() => {
     let cancelled = false
@@ -90,7 +104,7 @@ export default function VehicleSchedulePage() {
         const res = await carsGetAllPositions()
         if (!cancelled) {
           const data = (res.data as Record<string, CarPosition>) ?? {}
-          const list = Object.values(data)
+          const list = Object.values(data).filter((v) => v.kind !== "robot")
           setVehicles(list)
           // 同步更新选中车辆：若选中车辆仍在列表中，刷新其实时数据
           setSelected((prev) => {
@@ -129,7 +143,11 @@ export default function VehicleSchedulePage() {
     setBusy(true)
     try {
       await carsRunDemo(selectedRoute.id, selected.car_id)
-      toast.success(`车辆 #${selected.car_id} 已开始循迹「${selectedRoute.name}」`)
+      toast.success(
+        startMode === "current"
+          ? `车辆 #${selected.car_id} 已从当前位置开始循迹「${selectedRoute.name}」`
+          : `车辆 #${selected.car_id} 已导航到起点并开始循迹「${selectedRoute.name}」`
+      )
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "循迹指令发送失败")
     } finally {
@@ -170,9 +188,11 @@ export default function VehicleSchedulePage() {
           <CardContent className="relative flex-1 p-0!" style={{ minHeight: 0 }}>
             <ScheduleMap
               vehicles={vehicles}
-              onSelect={setSelected}
+              onSelect={handleSelect}
               selectedId={selected?.car_id}
               assignedRoute={selectedRoute}
+              startMode={startMode}
+              onStartModeChange={setStartMode}
             />
           </CardContent>
         </Card>
@@ -185,14 +205,17 @@ export default function VehicleSchedulePage() {
               busy={busy}
               commands={commands}
               onCommand={sendCommand}
-              onBack={() => setSelected(null)}
+              onBack={() => handleSelect(null)}
               routes={routes}
               assignedRouteId={assignments[selected.car_id] ?? null}
               onRouteChange={handleRouteChange}
               onTrack={handleTrack}
+              online={selectedOnline}
+              startMode={startMode}
+              onStartModeChange={setStartMode}
             />
           ) : (
-            <VehicleList vehicles={vehicles} onSelect={setSelected} />
+            <VehicleList vehicles={vehicles} onSelect={handleSelect} />
           )}
         </div>
       </div>
@@ -246,6 +269,8 @@ function VehicleRow({
   onClick: () => void
 }) {
   const alive = vehicle.speed > 0
+  const dotClass = batteryDotClass(vehicle.battery, alive)
+  const dotGlow = batteryDotGlow(vehicle.battery, alive)
   return (
     <button
       onClick={onClick}
@@ -255,9 +280,9 @@ function VehicleRow({
         <span
           className={cn(
             "size-2 shrink-0 rounded-full ring-1 ring-offset-1 ring-offset-card",
-            alive ? "bg-primary ring-primary/30" : "bg-muted-foreground/30 ring-transparent"
+            dotClass
           )}
-          style={alive ? { boxShadow: "0 0 8px var(--color-primary)" } : undefined}
+          style={dotGlow ? { boxShadow: dotGlow } : undefined}
         />
         <div className="min-w-0">
           <p className="truncate text-xs font-medium">
@@ -294,6 +319,9 @@ function VehicleDetail({
   assignedRouteId,
   onRouteChange,
   onTrack,
+  online,
+  startMode,
+  onStartModeChange,
 }: {
   vehicle: CarPosition
   busy: boolean
@@ -304,10 +332,31 @@ function VehicleDetail({
   assignedRouteId: number | null
   onRouteChange: (vehicleId: number, routeId: number | null) => void
   onTrack: () => void
+  online: boolean
+  startMode: "start" | "current"
+  onStartModeChange: (mode: "start" | "current") => void
 }) {
   const assignedRoute = routes.find((r) => r.id === assignedRouteId) ?? null
+
+  // 是否已在执行路线上（用于决定是否提供“从当前位置开始”选项）
+  const onRoute = React.useMemo(() => {
+    if (!assignedRoute) return false
+    const path =
+      assignedRoute.path && assignedRoute.path.length >= 2
+        ? assignedRoute.path
+        : assignedRoute.points
+    const clean = path.filter(
+      (p) => Number.isFinite(p[0]) && Number.isFinite(p[1])
+    )
+    if (clean.length < 2) return false
+    return (
+      projectToPath(clean, [vehicle.x, vehicle.y]).distance <=
+      ON_ROUTE_THRESHOLD
+    )
+  }, [assignedRoute, vehicle])
+
   return (
-    <>
+    <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto" style={{ minHeight: 0 }}>
       {/* 车辆信息 */}
       <Card size="sm">
         <CardHeader>
@@ -332,6 +381,13 @@ function VehicleDetail({
           <InfoRow icon={GaugeIcon} label="速度">
             {vehicle.speed.toFixed(2)} m/s
           </InfoRow>
+          {vehicle.battery != null && (
+            <InfoRow icon={BatteryIcon} label="电量">
+              <span className={vehicle.battery <= 20 ? "text-destructive" : undefined}>
+                {vehicle.battery}%
+              </span>
+            </InfoRow>
+          )}
           {vehicle.angle != null && (
             <InfoRow icon={NavigationIcon} label="朝向">
               {vehicle.angle.toFixed(1)}°
@@ -344,6 +400,8 @@ function VehicleDetail({
           )}
         </CardContent>
       </Card>
+
+      <MonitorPreviewCard kind="vehicle" carId={vehicle.car_id} online={online} />
 
       {/* 执行路线 */}
       <Card size="sm">
@@ -391,6 +449,26 @@ function VehicleDetail({
             <ExternalLinkIcon className="size-3" />
             管理路线
           </Link>
+          {assignedRoute && onRoute && (
+            <div className="flex gap-1.5">
+              <Button
+                size="sm"
+                variant={startMode === "start" ? "default" : "secondary"}
+                className="flex-1"
+                onClick={() => onStartModeChange("start")}
+              >
+                从起点开始
+              </Button>
+              <Button
+                size="sm"
+                variant={startMode === "current" ? "default" : "secondary"}
+                className="flex-1"
+                onClick={() => onStartModeChange("current")}
+              >
+                从当前位置开始
+              </Button>
+            </div>
+          )}
           {assignedRoute && (
             <Button
               size="sm"
@@ -399,7 +477,9 @@ function VehicleDetail({
               onClick={onTrack}
             >
               <NavigationIcon data-icon="inline-start" />
-              循迹导航：{assignedRoute.name}
+              {startMode === "current"
+                ? `从当前位置开始循迹：${assignedRoute.name}`
+                : `导航到起点并循迹：${assignedRoute.name}`}
             </Button>
           )}
         </CardContent>
@@ -426,26 +506,8 @@ function VehicleDetail({
           ))}
         </CardContent>
       </Card>
-    </>
-  )
-}
-
-/* ==================== Info Row ==================== */
-
-function InfoRow({
-  icon: Icon,
-  label,
-  children,
-}: {
-  icon: React.ComponentType<{ className?: string }>
-  label: string
-  children: React.ReactNode
-}) {
-  return (
-    <div className="flex items-center gap-2.5 text-xs">
-      <Icon className="size-3.5 shrink-0 text-muted-foreground/40" />
-      <span className="w-10 shrink-0 text-muted-foreground/50">{label}</span>
-      <span className="font-mono tabular-nums text-foreground/80">{children}</span>
     </div>
   )
 }
+
+

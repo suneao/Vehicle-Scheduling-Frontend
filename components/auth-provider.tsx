@@ -36,17 +36,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   })
 
   React.useEffect(() => {
-    if (DEV_MODE) {
-      setToken(DEV_TOKEN)
-      setState({ token: DEV_TOKEN, isAuthenticated: true, isLoading: false })
-      return
+    let cancelled = false
+    const hydrate = () => {
+      if (cancelled) return
+      if (DEV_MODE) {
+        setToken(DEV_TOKEN)
+        setState({ token: DEV_TOKEN, isAuthenticated: true, isLoading: false })
+        return
+      }
+      const token = getToken()
+      setState({
+        token,
+        isAuthenticated: !!token,
+        isLoading: false,
+      })
     }
-    const token = getToken()
-    setState({
-      token,
-      isAuthenticated: !!token,
-      isLoading: false,
-    })
+    queueMicrotask(hydrate)
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   const login = React.useCallback(

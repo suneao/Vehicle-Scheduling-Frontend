@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { useAuth } from "@/components/auth-provider"
 import { cn } from "@/lib/utils"
+import { batteryDotClass, batteryDotGlow } from "@/lib/battery"
 
 const MapView = dynamic(() => import("@/components/map-view").then((m) => m.MapView), {
   ssr: false,
@@ -294,15 +295,17 @@ function StatCard({
 
 function VehicleRow({ car }: { car: CarPosition }) {
   const alive = car.speed > 0
+  const dotClass = batteryDotClass(car.battery, alive)
+  const dotGlow = batteryDotGlow(car.battery, alive)
   return (
     <div className="flex items-center justify-between rounded-lg border border-border/10 bg-muted/10 p-2.5 transition-colors hover:border-border/25 hover:bg-muted/20">
       <div className="flex min-w-0 items-center gap-2.5">
         <span
           className={cn(
             "size-2 shrink-0 rounded-full ring-1 ring-offset-1 ring-offset-card",
-            alive ? "bg-primary ring-primary/30" : "bg-muted-foreground/30 ring-transparent"
+            dotClass
           )}
-          style={alive ? { boxShadow: "0 0 8px var(--color-primary)" } : undefined}
+          style={dotGlow ? { boxShadow: dotGlow } : undefined}
         />
         <div className="min-w-0">
           <p className="truncate text-xs font-medium">

@@ -49,7 +49,7 @@ function MapLoading() {
 }
 
 export default function RoutesPage() {
-  const [routes, setRoutes] = React.useState<Route[]>([])
+  const [routes, setRoutes] = React.useState<Route[]>(() => getRoutes())
   const [selectedId, setSelectedId] = React.useState<number | null>(null)
 
   // 绘制状态
@@ -79,10 +79,6 @@ export default function RoutesPage() {
   const [editStops, setEditStops] = React.useState<(RouteStop | null)[]>([])
   // 当前展开站点设置面板的航点索引
   const [stopEditIndex, setStopEditIndex] = React.useState<number | null>(null)
-
-  React.useEffect(() => {
-    setRoutes(getRoutes())
-  }, [])
 
   const selected = routes.find((r) => r.id === selectedId) ?? null
 
@@ -503,7 +499,7 @@ export default function RoutesPage() {
                     <div className="flex flex-col items-center justify-center gap-3 py-12">
                       <RouteIcon className="size-6 text-muted-foreground/20" />
                       <p className="text-xs text-muted-foreground/50">暂无路线</p>
-                      <p className="text-[10px] text-muted-foreground/30">点击"添加路线"开始绘制</p>
+                      <p className="text-[10px] text-muted-foreground/30">点击“添加路线”开始绘制</p>
                     </div>
                   ) : (
                     <div className="flex flex-col gap-1.5">
@@ -743,7 +739,7 @@ export default function RoutesPage() {
                               </div>
                             )}
                             <p className="text-[9px] text-muted-foreground/40">
-                              自动：车辆到站停车，等待设定时间后自动继续行驶；手动：到站停车，等待人工发送"继续"指令发车。
+                              自动：车辆到站停车，等待设定时间后自动继续行驶；手动：到站停车，等待人工发送“继续”指令发车。
                             </p>
                           </div>
                         )}

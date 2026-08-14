@@ -282,6 +282,10 @@ export interface CarPosition {
   y: number
   speed: number
   angle?: number
+  /** 电量百分比 0-100（后端未提供时为 undefined） */
+  battery?: number
+  /** 类型：vehicle = 车辆；robot = 机器狗（后端未提供时为 undefined，默认按车辆处理） */
+  kind?: "vehicle" | "robot"
   update_time?: string
 }
 

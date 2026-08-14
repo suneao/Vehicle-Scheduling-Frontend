@@ -1,20 +1,22 @@
 "use client"
 
 import * as React from "react"
-import AMapLoader from "@amap/amap-jsapi-loader"
 import { useTheme } from "next-themes"
-import { getMapThemeConfig } from "@/lib/map-theme"
+import {
+  type MapEntry,
+  type MapOverlay,
+  type DrivingResult,
+  type AmapLngLat,
+  loadAmap,
+  createAmapMap,
+  resolveMapStyle,
+  detectWebglUsed,
+} from "@/lib/amap"
 import { pointMarkerHtml, endMarkerHtml, stopMarkerHtml } from "@/lib/map-markers"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import type { Route, RouteStop } from "@/lib/routes"
 import { MaximizeIcon } from "lucide-react"
-
-const AMAP_KEY = process.env.NEXT_PUBLIC_AMAP_KEY ?? ""
-const AMAP_SECURITY_CODE = process.env.NEXT_PUBLIC_AMAP_SECURITY_CODE ?? ""
-
-const DEFAULT_CENTER: [number, number] = [114.003, 22.602]
-const DEFAULT_ZOOM = 16
 
 /**
  * Catmull-Rom 样条采样为平滑曲线（近似贝塞尔曲线，穿过所有航点）
@@ -110,8 +112,8 @@ export function RouteMap({
 }: RouteMapProps) {
   const { resolvedTheme } = useTheme()
   const containerRef = React.useRef<HTMLDivElement>(null)
-  const mapRef = React.useRef<any>(null)
-  const overlaysRef = React.useRef<any[]>([])
+  const mapRef = React.useRef<MapEntry | null>(null)
+  const overlaysRef = React.useRef<MapOverlay[]>([])
   const onMapClickRef = React.useRef(onMapClick)
   const onDraftPointsChangeRef = React.useRef(onDraftPointsChange)
   const onRouteClickRef = React.useRef(onRouteClick)
@@ -119,7 +121,7 @@ export function RouteMap({
   const onDraftPathChangeRef = React.useRef(onDraftPathChange)
   const onEditPathChangeRef = React.useRef(onEditPathChange)
   /** 每条路线的覆盖物（用于选中路线时聚焦视野） */
-  const routeOverlayMapRef = React.useRef<Record<number, any[]>>({})
+  const routeOverlayMapRef = React.useRef<Record<number, MapOverlay[]>>({})
   const [ready, setReady] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   // WebGL 是否被高德实际使用：false 时地图降级为 img 瓦片渲染，主题无法切换，强制亮色
@@ -146,45 +148,36 @@ export function RouteMap({
     onEditPathChangeRef.current = onEditPathChange
   }, [onEditPathChange])
 
-  const mapStyle = React.useMemo(() => {
-    const cfg = getMapThemeConfig()
-    // WebGL 不可用时地图固定亮色主题，忽略暗色配置
-    if (webglUsed === false) return cfg.light
-    return resolvedTheme === "dark" ? cfg.dark : cfg.light
-  }, [resolvedTheme, webglUsed])
+  const mapStyle = React.useMemo(
+    () => resolveMapStyle(resolvedTheme, webglUsed),
+    [resolvedTheme, webglUsed]
+  )
+
+  // 主初始化 effect 需要初始 mapStyle，但不随主题重建地图：用 ref 传递
+  const mapStyleRef = React.useRef(mapStyle)
+  React.useEffect(() => {
+    mapStyleRef.current = mapStyle
+  }, [mapStyle])
 
   // 初始化地图
   React.useEffect(() => {
     let cancelled = false
     const container = containerRef.current
-    window._AMapSecurityConfig = { securityJsCode: AMAP_SECURITY_CODE }
-
-    AMapLoader.load({
-      key: AMAP_KEY,
-      version: "2.0",
-      plugins: ["AMap.Scale", "AMap.Driving"],
-    })
-      .then((AMap: any) => {
+    loadAmap(["AMap.Scale", "AMap.Driving"])
+      .then((AMap) => {
         if (cancelled || !container) return
-        const map = new AMap.Map(container, {
-          viewMode: "3D",
-          pitch: 0,
-          zoom: DEFAULT_ZOOM,
-          center: DEFAULT_CENTER,
-          mapStyle,
-          resizeEnable: true,
-          devicePixelRatio: 2,
-        })
+        const map = createAmapMap(AMap, container, mapStyleRef.current)
         map.addControl(new AMap.Scale())
 
         // 检测高德是否实际使用 WebGL 渲染（WebGL 渲染会创建 canvas，img 瓦片降级则无 canvas）
         map.on("complete", () => {
-          setWebglUsed(container.querySelectorAll("canvas").length > 0)
+          setWebglUsed(detectWebglUsed(container))
         })
 
         // 地图点击（绘制模式收集点）
-        map.on("click", (e: any) => {
-          const lnglat = e.lnglat
+        map.on("click", (...args: unknown[]) => {
+          const e = args[0] as { lnglat?: { getLng(): number; getLat(): number } }
+          const lnglat = e?.lnglat
           if (lnglat) {
             onMapClickRef.current?.([lnglat.getLng(), lnglat.getLat()])
           }
@@ -247,23 +240,22 @@ export function RouteMap({
     }
 
     const timer = setTimeout(() => {
-      const extract = (status: string, result: any): [number, number][] | null => {
+      const extract = (status: string, result: DrivingResult): [number, number][] | null => {
         if (status !== "complete") return null
         const steps = result?.routes?.[0]?.steps
         if (!Array.isArray(steps)) return null
-        const path = steps.flatMap((s: any) => s.path ?? [])
+        const path = steps.flatMap((s) => s.path ?? [])
         if (path.length < 2) return null
-        return path.map((p: any) => [
-          Number.isFinite(p?.getLng?.()) ? p.getLng() : p?.[0],
-          Number.isFinite(p?.getLat?.()) ? p.getLat() : p?.[1],
-        ])
+        return path.map((p: AmapLngLat): [number, number] =>
+          Array.isArray(p) ? [p[0], p[1]] : [p.getLng(), p.getLat()]
+        )
       }
 
       const doResolve = () => {
         // 途经点通过 opts.waypoints 传入（官方文档用法）
         const driving = new AMap.Driving({ policy: 0 }) // 0 = 速度优先
         if (waypoints.length === 2) {
-          driving.search(waypoints[0], waypoints[1], (status: string, result: unknown) => {
+          driving.search(waypoints[0], waypoints[1], (status: string, result: DrivingResult) => {
             report(extract(status, result), status)
           })
         } else {
@@ -271,7 +263,7 @@ export function RouteMap({
             waypoints[0],
             waypoints[waypoints.length - 1],
             { waypoints: waypoints.slice(1, -1) },
-            (status: string, result: unknown) => {
+            (status: string, result: DrivingResult) => {
               report(extract(status, result), status)
             }
           )
@@ -319,7 +311,7 @@ export function RouteMap({
       weight: number,
       opacity: number,
       onClick?: () => void,
-      collect?: any[]
+      collect?: MapOverlay[]
     ) {
       const casing = new AMap.Polyline({
         path,
@@ -352,7 +344,7 @@ export function RouteMap({
     }
 
     // 清除旧覆盖物
-    for (const o of overlaysRef.current) o.setMap?.(null) ?? o.remove?.()
+    for (const o of overlaysRef.current) o.setMap(null)
     overlaysRef.current = []
     routeOverlayMapRef.current = {}
 
@@ -399,8 +391,11 @@ export function RouteMap({
           offset: new AMap.Pixel(-9, -9),
           content: pointMarkerHtml("#f59e0b", String(i + 1)),
         })
-        marker.on("dragend", (e: any) => {
-          const pos = e.target?.getPosition?.()
+        marker.on("dragend", (...args: unknown[]) => {
+          const e = args[0] as {
+            target?: { getPosition?: () => { getLng(): number; getLat(): number } | null }
+          }
+          const pos = e?.target?.getPosition?.()
           if (!pos) return
           const np: [number, number] = [pos.getLng(), pos.getLat()]
           if (!Number.isFinite(np[0]) || !Number.isFinite(np[1])) return
@@ -431,7 +426,7 @@ export function RouteMap({
           const color = r.color ?? "#3b82f6"
           const selectRoute = () => onRouteClickRef.current?.(r.id)
           // 收集该路线的全部覆盖物（用于选中时聚焦）
-          const routeOverlays: any[] = []
+          const routeOverlays: MapOverlay[] = []
           routeOverlayMapRef.current[r.id] = routeOverlays
 
           // 选中路线：外圈光晕
@@ -505,7 +500,7 @@ export function RouteMap({
         }
       })
     }
-  }, [routes, selectedRouteId, drawing, draftPoints, editing, editPoints, editStops, resolvedTheme, ready, webglUsed])
+  }, [routes, selectedRouteId, drawing, draftPoints, draftPath, editing, editPoints, editPath, editStops, resolvedTheme, ready, webglUsed, lightMap])
 
   // 视野跟随：选中路线 → 聚焦该路线；未选中 → 整体视图；绘制/编辑 → 适配全部覆盖物
   React.useEffect(() => {

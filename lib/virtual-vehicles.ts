@@ -1,13 +1,13 @@
 /**
- * 虚拟小车数据生成器
- * 用于前端测试：无真实 ROS 车辆接入时，模拟多辆小车在南方科技大学附近移动。
- * 支持两种移动模式：默认椭圆巡逻轨迹 / 按指定路线行走。
+ * 虚拟车辆/机器狗数据生成器
+ * 用于前端测试：无真实 ROS 接入时，模拟车辆与机器狗在南方科技大学附近移动。
+ * 车辆使用椭圆巡逻轨迹，机器狗使用 8 字形（李萨如）巡逻轨迹；有路线分配时沿路线行走。
  */
 
 import type { CarPosition } from "@/lib/api"
 import type { Route } from "@/lib/routes"
 
-/** 虚拟小车开关：true 时真实数据为空会注入虚拟车辆 */
+/** 虚拟单元开关：true 时真实数据为空会注入虚拟车辆/机器狗 */
 export const VIRTUAL_VEHICLES_ENABLED = true
 
 /** 1 经度/纬度 ≈ 111 km（用于把角速度换算为 m/s） */
@@ -16,9 +16,10 @@ const DEG_TO_M = 111000
 /** 按路线行走时的速度（m/s） */
 const ROUTE_SPEED_MPS = 4
 
-/** 虚拟车辆配置：默认椭圆轨迹 */
-interface VirtualVehicleConfig {
+/** 虚拟单元配置 */
+interface VirtualUnitConfig {
   car_id: number
+  kind: "vehicle" | "robot"
   cx: number
   cy: number
   radius: number
@@ -26,12 +27,23 @@ interface VirtualVehicleConfig {
   phase: number
 }
 
-const VIRTUAL_VEHICLES: VirtualVehicleConfig[] = [
-  { car_id: 1, cx: 113.9992, cy: 22.6004, radius: 0.0032, speed: 0.0225, phase: 0.0 },
-  { car_id: 2, cx: 114.0048, cy: 22.6042, radius: 0.0024, speed: 0.03, phase: 1.4 },
-  { car_id: 3, cx: 114.0015, cy: 22.5986, radius: 0.0041, speed: 0.0176, phase: 2.6 },
-  { car_id: 4, cx: 114.0066, cy: 22.6018, radius: 0.0026, speed: 0.0277, phase: 4.0 },
+/** 虚拟车辆（椭圆巡逻） */
+const VIRTUAL_VEHICLES: VirtualUnitConfig[] = [
+  { car_id: 1, kind: "vehicle", cx: 113.9992, cy: 22.6004, radius: 0.0032, speed: 0.0225, phase: 0.0 },
+  { car_id: 2, kind: "vehicle", cx: 114.0048, cy: 22.6042, radius: 0.0024, speed: 0.03, phase: 1.4 },
+  { car_id: 3, kind: "vehicle", cx: 114.0015, cy: 22.5986, radius: 0.0041, speed: 0.0176, phase: 2.6 },
+  { car_id: 4, kind: "vehicle", cx: 114.0066, cy: 22.6018, radius: 0.0026, speed: 0.0277, phase: 4.0 },
 ]
+
+/** 虚拟机器狗（8 字形巡逻，半径更小、速度更快） */
+const VIRTUAL_ROBOTS: VirtualUnitConfig[] = [
+  { car_id: 101, kind: "robot", cx: 114.0025, cy: 22.6015, radius: 0.0018, speed: 0.04, phase: 0.5 },
+  { car_id: 102, kind: "robot", cx: 114.0038, cy: 22.6030, radius: 0.0014, speed: 0.035, phase: 2.0 },
+  { car_id: 103, kind: "robot", cx: 114.0055, cy: 22.6005, radius: 0.0020, speed: 0.045, phase: 3.5 },
+  { car_id: 104, kind: "robot", cx: 114.0010, cy: 22.6040, radius: 0.0016, speed: 0.038, phase: 5.0 },
+]
+
+const VIRTUAL_UNITS = [...VIRTUAL_VEHICLES, ...VIRTUAL_ROBOTS]
 
 /** 两点欧氏距离（经纬度） */
 function dist(a: [number, number], b: [number, number]): number {
@@ -205,7 +217,7 @@ function moveAlongRoute(
 }
 
 /** 默认椭圆轨迹 */
-function moveEllipse(v: VirtualVehicleConfig, t: number): CarPosition {
+function moveEllipse(v: VirtualUnitConfig, t: number): CarPosition {
   const { car_id, cx, cy, radius, speed, phase } = v
   const x = cx + Math.cos(t * speed + phase) * radius
   const y = cy + Math.sin(t * speed + phase) * radius * 0.85
@@ -224,6 +236,36 @@ function moveEllipse(v: VirtualVehicleConfig, t: number): CarPosition {
   }
 }
 
+/** 机器狗 8 字形（李萨如）巡逻轨迹 */
+function moveRobot(v: VirtualUnitConfig, t: number): CarPosition {
+  const { car_id, cx, cy, radius, speed, phase } = v
+  const a = t * speed + phase
+  const x = cx + Math.cos(a) * radius
+  const y = cy + Math.sin(2 * a) * radius * 0.6
+  const vx = -Math.sin(a) * speed * radius
+  const vy = 2 * Math.cos(2 * a) * speed * radius * 0.6
+  const speedMps = Math.hypot(vx, vy) * DEG_TO_M
+  const angle = (Math.atan2(vy, vx) * 180) / Math.PI
+
+  return {
+    car_id,
+    x,
+    y,
+    speed: Number(speedMps.toFixed(2)),
+    angle: Number(angle.toFixed(1)),
+    update_time: new Date().toISOString(),
+  }
+}
+
+/** 模拟电量百分比：随分钟缓慢下降并循环（15~99） */
+function batteryFor(carId: number, now: number): number {
+  const minutes = Math.floor(now / 60)
+  const start = 85 + ((carId * 7) % 15)
+  const cycle = 120
+  const phase = (minutes + carId * 13) % cycle
+  return Math.round(Math.max(15, start - phase))
+}
+
 /**
  * 生成当前时刻的虚拟车辆位置
  * @param routeMap 车辆 → 路线映射；有路线的车辆沿路线行走，其余走椭圆轨迹
@@ -234,11 +276,18 @@ export function getVirtualCarPositions(
   const t = Date.now() / 1000
   const result: Record<string, CarPosition> = {}
 
-  for (const v of VIRTUAL_VEHICLES) {
+  for (const v of VIRTUAL_UNITS) {
     const route = routeMap?.[v.car_id]
-    result[String(v.car_id)] = route
+    const pos = route
       ? moveAlongRoute(route, t, v.car_id)
-      : moveEllipse(v, t)
+      : v.kind === "robot"
+        ? moveRobot(v, t)
+        : moveEllipse(v, t)
+    result[String(v.car_id)] = {
+      ...pos,
+      kind: v.kind,
+      battery: batteryFor(v.car_id, t),
+    }
   }
 
   return result

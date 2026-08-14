@@ -31,6 +31,7 @@ import {
   setRouteAssignment,
 } from "@/lib/route-assignments"
 import { releaseVehicleStops } from "@/lib/virtual-vehicles"
+import { MonitorPreviewCard } from "@/components/monitor-preview-card"
 import {
   ArrowLeftIcon,
   ArrowRightIcon,
@@ -46,8 +47,12 @@ import {
   PauseIcon,
   SquareIcon,
   RefreshCwIcon,
+  BatteryIcon,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { batteryDotClass, batteryDotGlow } from "@/lib/battery"
+import { ON_ROUTE_THRESHOLD, projectToPath } from "@/lib/route-geometry"
+import { InfoRow } from "@/components/info-row"
 
 const ScheduleMap = dynamic(
   () => import("@/components/schedule-map").then((m) => m.ScheduleMap),
@@ -66,13 +71,17 @@ export default function PatrolSchedulePage() {
   const [robots, setRobots] = React.useState<CarPosition[]>([])
   const [selected, setSelected] = React.useState<CarPosition | null>(null)
   const [busy, setBusy] = React.useState(false)
-  const [routes, setRoutes] = React.useState<Route[]>([])
-  const [assignments, setAssignments] = React.useState<Record<number, number>>({})
+  const [startMode, setStartMode] = React.useState<"start" | "current">("start")
+  const [routes] = React.useState<Route[]>(() => getRoutes())
+  const [assignments, setAssignments] = React.useState<Record<number, number>>(
+    () => getRouteAssignments()
+  )
 
-  React.useEffect(() => {
-    setRoutes(getRoutes())
-    setAssignments(getRouteAssignments())
-  }, [])
+  // 选中机器狗/取消选中：切换时重置循迹起始方式
+  function handleSelect(robot: CarPosition | null) {
+    setStartMode("start")
+    setSelected(robot)
+  }
 
   // 设置/清除机器狗巡逻路线
   function handleRouteChange(robotId: number, routeId: number | null) {
@@ -86,6 +95,30 @@ export default function PatrolSchedulePage() {
     ? (routes.find((r) => r.id === assignments[selected.car_id]) ?? null)
     : null
 
+  // 选中机器狗是否仍在线（仍在最新位置列表里）
+  const selectedOnline = selected
+    ? robots.some((v) => v.car_id === selected.car_id)
+    : false
+
+  // 机器狗 id 集合（稳定：仅 id 集合变化时更新）
+  const robotIdKey = React.useMemo(
+    () => robots.map((r) => r.car_id).sort((a, b) => a - b).join(","),
+    [robots]
+  )
+
+  // 所有机器狗已分配的巡逻路线（常驻半透明显示）
+  const overviewRoutes = React.useMemo(() => {
+    const robotIds = new Set(
+      robotIdKey ? robotIdKey.split(",").map((n) => Number(n)) : []
+    )
+    const routeIds = new Set(
+      Object.entries(assignments)
+        .filter(([id]) => robotIds.has(Number(id)))
+        .map(([, routeId]) => routeId)
+    )
+    return routes.filter((r) => routeIds.has(r.id))
+  }, [robotIdKey, assignments, routes])
+
   // 轮询机器狗位置
   React.useEffect(() => {
     let cancelled = false
@@ -94,7 +127,7 @@ export default function PatrolSchedulePage() {
         const res = await carsGetAllPositions()
         if (!cancelled) {
           const data = (res.data as Record<string, CarPosition>) ?? {}
-          const list = Object.values(data)
+          const list = Object.values(data).filter((v) => v.kind === "robot")
           setRobots(list)
           // 同步更新选中机器狗：若仍在线则刷新其实时数据
           setSelected((prev) => {
@@ -132,7 +165,11 @@ export default function PatrolSchedulePage() {
     setBusy(true)
     try {
       await carsRunDemo(selectedRoute.id, selected.car_id)
-      toast.success(`机器狗 #${selected.car_id} 已开始循迹「${selectedRoute.name}」`)
+      toast.success(
+        startMode === "current"
+          ? `机器狗 #${selected.car_id} 已从当前位置开始循迹「${selectedRoute.name}」`
+          : `机器狗 #${selected.car_id} 已导航到起点并开始循迹「${selectedRoute.name}」`
+      )
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "循迹指令发送失败")
     } finally {
@@ -173,18 +210,18 @@ export default function PatrolSchedulePage() {
           <CardContent className="relative flex-1 p-0!" style={{ minHeight: 0 }}>
             <ScheduleMap
               vehicles={robots}
-              onSelect={setSelected}
+              onSelect={handleSelect}
               selectedId={selected?.car_id}
               assignedRoute={selectedRoute}
+              startMode={startMode}
+              onStartModeChange={setStartMode}
+              overviewRoutes={overviewRoutes}
             />
           </CardContent>
         </Card>
 
         {/* 右侧面板 */}
         <div className="flex flex-col gap-5" style={{ minHeight: 0 }}>
-          {/* 巡逻路线 */}
-          <RouteCard routes={routes} />
-
           {/* 机器狗列表 / 详情 */}
           {selected ? (
             <RobotDetail
@@ -192,72 +229,21 @@ export default function PatrolSchedulePage() {
               busy={busy}
               commands={commands}
               onCommand={sendCommand}
-              onBack={() => setSelected(null)}
+              onBack={() => handleSelect(null)}
               routes={routes}
               assignedRouteId={assignments[selected.car_id] ?? null}
               onRouteChange={handleRouteChange}
               onTrack={handleTrack}
+              online={selectedOnline}
+              startMode={startMode}
+              onStartModeChange={setStartMode}
             />
           ) : (
-            <RobotList robots={robots} onSelect={setSelected} />
+            <RobotList robots={robots} onSelect={handleSelect} />
           )}
         </div>
       </div>
     </div>
-  )
-}
-
-/* ==================== Route Card ==================== */
-
-function RouteCard({ routes }: { routes: Route[] }) {
-  return (
-    <Card size="sm" className="shrink-0">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-sm">
-          <RouteIcon className="size-4 text-primary" />
-          巡逻路线
-        </CardTitle>
-        <CardDescription>共 {routes.length} 条路线</CardDescription>
-      </CardHeader>
-      <CardContent>
-        {routes.length === 0 ? (
-          <div className="flex flex-col items-center gap-3 py-4 text-center">
-            <div className="flex size-14 items-center justify-center rounded-full bg-muted/20 ring-1 ring-border/10">
-              <RouteIcon className="size-6 text-muted-foreground/15" />
-            </div>
-            <p className="text-xs text-muted-foreground/50">暂无巡逻路线</p>
-            <p className="text-[10px] text-muted-foreground/30">
-              请在高德地图上绘制巡逻路线
-            </p>
-          </div>
-        ) : (
-          <div className="flex flex-col gap-1.5">
-            {routes.map((r) => (
-              <div
-                key={r.id}
-                className="flex items-center gap-2 rounded-lg border border-border/10 bg-muted/10 px-2.5 py-2"
-              >
-                <span
-                  className="size-2 shrink-0 rounded-full"
-                  style={{ backgroundColor: r.color ?? "#3b82f6" }}
-                />
-                <span className="min-w-0 flex-1 truncate text-xs">{r.name}</span>
-                <span className="font-mono text-[10px] text-muted-foreground/40">
-                  {r.points.length} 点
-                </span>
-              </div>
-            ))}
-            <Link
-              href="/schedule/routes"
-              className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-muted-foreground/50 transition-colors hover:text-foreground"
-            >
-              <ExternalLinkIcon className="size-3" />
-              管理路线
-            </Link>
-          </div>
-        )}
-      </CardContent>
-    </Card>
   )
 }
 
@@ -310,6 +296,8 @@ function RobotRow({
   onClick: () => void
 }) {
   const alive = robot.speed > 0
+  const dotClass = batteryDotClass(robot.battery, alive)
+  const dotGlow = batteryDotGlow(robot.battery, alive)
   return (
     <button
       onClick={onClick}
@@ -319,9 +307,9 @@ function RobotRow({
         <span
           className={cn(
             "size-2 shrink-0 rounded-full ring-1 ring-offset-1 ring-offset-card",
-            alive ? "bg-primary ring-primary/30" : "bg-muted-foreground/30 ring-transparent"
+            dotClass
           )}
-          style={alive ? { boxShadow: "0 0 8px var(--color-primary)" } : undefined}
+          style={dotGlow ? { boxShadow: dotGlow } : undefined}
         />
         <div className="min-w-0">
           <p className="truncate text-xs font-medium">
@@ -358,6 +346,9 @@ function RobotDetail({
   assignedRouteId,
   onRouteChange,
   onTrack,
+  online,
+  startMode,
+  onStartModeChange,
 }: {
   robot: CarPosition
   busy: boolean
@@ -368,10 +359,31 @@ function RobotDetail({
   assignedRouteId: number | null
   onRouteChange: (robotId: number, routeId: number | null) => void
   onTrack: () => void
+  online: boolean
+  startMode: "start" | "current"
+  onStartModeChange: (mode: "start" | "current") => void
 }) {
   const assignedRoute = routes.find((r) => r.id === assignedRouteId) ?? null
+
+  // 是否已在巡逻路线上（用于决定是否提供“从当前位置开始”选项）
+  const onRoute = React.useMemo(() => {
+    if (!assignedRoute) return false
+    const path =
+      assignedRoute.path && assignedRoute.path.length >= 2
+        ? assignedRoute.path
+        : assignedRoute.points
+    const clean = path.filter(
+      (p) => Number.isFinite(p[0]) && Number.isFinite(p[1])
+    )
+    if (clean.length < 2) return false
+    return (
+      projectToPath(clean, [robot.x, robot.y]).distance <=
+      ON_ROUTE_THRESHOLD
+    )
+  }, [assignedRoute, robot])
+
   return (
-    <div className="flex flex-col gap-5" style={{ minHeight: 0 }}>
+    <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto" style={{ minHeight: 0 }}>
       {/* 机器狗信息 */}
       <Card size="sm">
         <CardHeader>
@@ -396,6 +408,13 @@ function RobotDetail({
           <InfoRow icon={GaugeIcon} label="速度">
             {robot.speed.toFixed(2)} m/s
           </InfoRow>
+          {robot.battery != null && (
+            <InfoRow icon={BatteryIcon} label="电量">
+              <span className={robot.battery <= 20 ? "text-destructive" : undefined}>
+                {robot.battery}%
+              </span>
+            </InfoRow>
+          )}
           {robot.angle != null && (
             <InfoRow icon={NavigationIcon} label="朝向">
               {robot.angle.toFixed(1)}°
@@ -408,6 +427,8 @@ function RobotDetail({
           )}
         </CardContent>
       </Card>
+
+      <MonitorPreviewCard kind="robot" carId={robot.car_id} online={online} />
 
       {/* 巡逻路线分配 */}
       <Card size="sm">
@@ -455,6 +476,26 @@ function RobotDetail({
             <ExternalLinkIcon className="size-3" />
             管理路线
           </Link>
+          {assignedRoute && onRoute && (
+            <div className="flex gap-1.5">
+              <Button
+                size="sm"
+                variant={startMode === "start" ? "default" : "secondary"}
+                className="flex-1"
+                onClick={() => onStartModeChange("start")}
+              >
+                从起点开始
+              </Button>
+              <Button
+                size="sm"
+                variant={startMode === "current" ? "default" : "secondary"}
+                className="flex-1"
+                onClick={() => onStartModeChange("current")}
+              >
+                从当前位置开始
+              </Button>
+            </div>
+          )}
           {assignedRoute && (
             <Button
               size="sm"
@@ -463,7 +504,9 @@ function RobotDetail({
               onClick={onTrack}
             >
               <NavigationIcon data-icon="inline-start" />
-              循迹导航：{assignedRoute.name}
+              {startMode === "current"
+                ? `从当前位置开始循迹：${assignedRoute.name}`
+                : `导航到起点并循迹：${assignedRoute.name}`}
             </Button>
           )}
         </CardContent>
@@ -495,22 +538,4 @@ function RobotDetail({
   )
 }
 
-/* ==================== Info Row ==================== */
 
-function InfoRow({
-  icon: Icon,
-  label,
-  children,
-}: {
-  icon: React.ComponentType<{ className?: string }>
-  label: string
-  children: React.ReactNode
-}) {
-  return (
-    <div className="flex items-center gap-2.5 text-xs">
-      <Icon className="size-3.5 shrink-0 text-muted-foreground/40" />
-      <span className="w-10 shrink-0 text-muted-foreground/50">{label}</span>
-      <span className="font-mono tabular-nums text-foreground/80">{children}</span>
-    </div>
-  )
-}

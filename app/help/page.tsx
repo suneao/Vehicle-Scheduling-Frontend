@@ -14,6 +14,7 @@ import {
   AlarmClockIcon,
   UsersIcon,
   SettingsIcon,
+  VideoIcon,
   CircleHelpIcon,
   CornerDownRightIcon,
 } from "lucide-react"
@@ -104,6 +105,7 @@ const sections = [
   { id: "schedule", label: "调度中心", icon: CalendarDaysIcon },
   { id: "vehicle", label: "车辆调度", icon: CarFrontIcon },
   { id: "patrol", label: "机器狗巡逻", icon: BotIcon },
+  { id: "monitor", label: "实时监控", icon: VideoIcon },
   { id: "routes", label: "路线编辑", icon: RouteIcon },
   { id: "events", label: "事件管理", icon: AlarmClockIcon },
   { id: "account", label: "账户管理", icon: UsersIcon },
@@ -148,7 +150,7 @@ export default function HelpPage() {
             <Sub title="登录">
               <Steps
                 items={[
-                  <>打开 <code className="font-mono text-[11px]">/login</code>，输入用户名和密码后点击"登录"。</>,
+                  <>打开 <code className="font-mono text-[11px]">/login</code>，输入用户名和密码后点击“登录”。</>,
                   <>未登录时访问任何页面会自动跳转到登录页。</>,
                   <>演示账号：<Badge variant="secondary" className="font-mono text-[10px]">admin</Badge> / <Badge variant="secondary" className="font-mono text-[10px]">123456</Badge>。</>,
                 ]}
@@ -157,7 +159,7 @@ export default function HelpPage() {
             <Sub title="注册">
               <Steps
                 items={[
-                  <>填写姓名、昵称、邮箱、密码、地址，点击"发送验证码"将验证码发送到邮箱。</>,
+                  <>填写姓名、昵称、邮箱、密码、地址，点击“发送验证码”将验证码发送到邮箱。</>,
                   <>输入邮箱验证码后提交，即可创建普通账户。</>,
                 ]}
               />
@@ -220,9 +222,9 @@ export default function HelpPage() {
             <Sub title="车辆详情">
               <Steps
                 items={[
-                  <><strong className="text-foreground/90">实时数据</strong>：坐标、速度、朝向、更新时间，随轮询自动刷新。</>,
+                  <><strong className="text-foreground/90">实时数据</strong>：坐标、速度、电量、朝向、更新时间，随轮询自动刷新。</>,
                   <><strong className="text-foreground/90">执行路线</strong>：通过下拉框为车辆分配路线，分配后虚拟车辆将沿路线行驶；也可清除路线。</>,
-                  <><strong className="text-foreground/90">循迹导航</strong>：分配路线后出现"循迹导航"按钮，点击向车辆发送开始循迹指令。</>,
+                  <><strong className="text-foreground/90">循迹导航</strong>：分配路线后出现“循迹导航”按钮，点击向车辆发送开始循迹指令。</>,
                   <><strong className="text-foreground/90">控制命令</strong>：启动、暂停、继续、取消任务、休眠。</>,
                 ]}
               />
@@ -241,11 +243,43 @@ export default function HelpPage() {
             />
           </DocSection>
 
+          <DocSection id="monitor" icon={VideoIcon} title="实时监控" path="/schedule/monitor">
+            <Sub title="两级监控视图">
+              <Steps
+                items={[
+                  <><strong className="text-foreground/90">低分辨率预览</strong>：在车辆/机器狗调度页选中目标后，右侧详情面板显示低分辨率监控缩略图。</>,
+                  <><strong className="text-foreground/90">完整监控页</strong>：点击预览图或“进入完整监控”按钮，打开独立的实时监控页面。</>,
+                ]}
+              />
+            </Sub>
+            <Sub title="监控切换">
+              <P>右侧“监控切换”卡片列出该车辆/机器狗的多路监控（车辆：前视/后视/左视/右视/全景；机器狗：前视/后视/俯视/全景），点击即可切换主画面。</P>
+            </Sub>
+            <Sub title="画面缩放与移动">
+              <Steps
+                items={[
+                  <>点击右上角<strong className="text-foreground/90">放大 / 缩小 / 重置</strong>按钮调整缩放倍率。</>,
+                  <>点击右下角<strong className="text-foreground/90">方向按钮</strong>平移画面，点击<strong className="text-foreground/90">居中</strong>恢复默认视角。</>,
+                  <>也可以使用<strong className="text-foreground/90">鼠标滚轮</strong>缩放，<strong className="text-foreground/90">按住鼠标拖动</strong>平移画面。</>,
+                ]}
+              />
+            </Sub>
+            <Sub title="无监控状态">
+              <P>当车辆/机器狗暂未上报数据（离线）时，画面区域显示“无监控”，此时不显示监控画面。</P>
+            </Sub>
+            <Tips
+              items={[
+                <>监控画面为本地模拟流，接入真实摄像头后会自动替换为实时视频。</>,
+                <>实时数据卡片展示坐标、速度、电量、朝向与更新时间。</>,
+              ]}
+            />
+          </DocSection>
+
           <DocSection id="routes" icon={RouteIcon} title="路线编辑" path="/schedule/routes">
             <Sub title="添加路线">
               <Steps
                 items={[
-                  <>点击"添加路线"进入绘制模式，在地图上点击依次添加航点（至少 2 个），点击"保存路线"完成。</>,
+                  <>点击“添加路线”进入绘制模式，在地图上点击依次添加航点（至少 2 个），点击“保存路线”完成。</>,
                   <>绘制模式中<strong className="text-foreground/90">双击</strong>任意航点可删除该点。</>,
                 ]}
               />
@@ -264,11 +298,11 @@ export default function HelpPage() {
             <Sub title="编辑路线">
               <Steps
                 items={[
-                  <>点击列表中的铅笔图标（或选中路线后点"编辑路线"）进入编辑。</>,
+                  <>点击列表中的铅笔图标（或选中路线后点“编辑路线”）进入编辑。</>,
                   <><strong className="text-foreground/90">拖动</strong>橙色编号点调整航点位置。</>,
                   <><strong className="text-foreground/90">点击线段</strong>在最近处插入新航点；在首尾端点外侧点击可延伸路线。</>,
                   <><strong className="text-foreground/90">双击</strong>航点可删除；也可在右侧点列表中逐点删除。</>,
-                  <>点击"保存"生效（至少保留 2 个点），"取消"丢弃改动。</>,
+                  <>点击“保存”生效（至少保留 2 个点），“取消”丢弃改动。</>,
                 ]}
               />
             </Sub>
@@ -284,7 +318,7 @@ export default function HelpPage() {
             <Sub title="地图显示">
               <Tips
                 items={[
-                  <>每条路线以带描边的实线显示，并标注<strong className="text-foreground/90">起点"起"</strong>（实心圆）与<strong className="text-foreground/90">终点"终"</strong>（圆环），箭头指示行进方向。</>,
+                  <>每条路线以带描边的实线显示，并标注<strong className="text-foreground/90">起点“起”</strong>（实心圆）与<strong className="text-foreground/90">终点“终”</strong>（圆环），箭头指示行进方向。</>,
                   <>点击路线或起/终标记可选中预览；选中的路线加粗并带光晕。</>,
                   <>被事件引用的路线无法删除，需先删除相关事件。</>,
                 ]}
@@ -296,9 +330,9 @@ export default function HelpPage() {
             <Sub title="添加事件">
               <Steps
                 items={[
-                  <>点击"添加事件"，填写事件名称、执行时间、关联路线、目标车辆、动作（开启/关闭）与优先级。</>,
+                  <>点击“添加事件”，填写事件名称、执行时间、关联路线、目标车辆、动作（开启/关闭）与优先级。</>,
                   <><strong className="text-foreground/90">优先级</strong>为数字，越大越先执行。</>,
-                  <>点击"添加事件"保存。</>,
+                  <>点击“添加事件”保存。</>,
                 ]}
               />
             </Sub>
@@ -327,7 +361,7 @@ export default function HelpPage() {
               <Steps
                 items={[
                   <>点击账户行查看详细信息（角色、邮箱、电话等）。</>,
-                  <>管理员点击"创建用户"，填写信息并通过邮箱验证码创建新账户。</>,
+                  <>管理员点击“创建用户”，填写信息并通过邮箱验证码创建新账户。</>,
                   <>编辑账户可修改姓名、昵称、邮箱、电话、启用状态等字段。</>,
                 ]}
               />
