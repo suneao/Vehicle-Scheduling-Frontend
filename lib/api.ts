@@ -4,9 +4,6 @@
  * 所有接口按模块分类，统一管理，方便调用和修改
  */
 
-import { VIRTUAL_VEHICLES_ENABLED, getVirtualCarPositions } from "@/lib/virtual-vehicles"
-import { getRouteMapForVehicles } from "@/lib/route-assignments"
-
 // ==================== 基础配置 ====================
 
 // 通过 Next.js rewrites 代理，避免跨域
@@ -304,30 +301,21 @@ export async function carsUploadPosition(position: {
 
 /** GET /api/admin/cars/position/all — 获取全部小车实时位置（免鉴权） */
 export async function carsGetAllPositions() {
-  // 2 秒超时：后端不可用时避免轮询挂起，前端测试模式兜底返回虚拟小车
+  // 2 秒超时：后端不可用时避免轮询挂起，返回空结果
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 2000)
   try {
-    const res = await request<Record<string, CarPosition>>(
+    return await request<Record<string, CarPosition>>(
       "/api/admin/cars/position/all",
       { signal: controller.signal }
     )
-    // 真实车辆为空时注入虚拟小车（前端测试用）；有路线分配的车辆沿路线行走
-    const data = res.data ?? {}
-    if (Object.keys(data).length === 0 && VIRTUAL_VEHICLES_ENABLED) {
-      return { ...res, data: getVirtualCarPositions(getRouteMapForVehicles()) }
-    }
-    return res
   } catch {
-    // 请求失败/超时：测试模式下仍返回实时虚拟小车
-    if (VIRTUAL_VEHICLES_ENABLED) {
-      return {
-        code: 200,
-        msg: "虚拟小车",
-        data: getVirtualCarPositions(getRouteMapForVehicles()),
-      }
+    // 请求失败/超时：返回空结果，交由页面显示「无车辆/机器狗连接」
+    return {
+      code: 200,
+      msg: "车辆位置获取失败",
+      data: {},
     }
-    throw new Error("获取车辆位置失败")
   } finally {
     clearTimeout(timer)
   }

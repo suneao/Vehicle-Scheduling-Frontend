@@ -16,7 +16,6 @@ import {
   getRouteAssignments,
   setRouteAssignment,
 } from "@/lib/route-assignments"
-import { releaseVehicleStops } from "@/lib/virtual-vehicles"
 import { MonitorPreviewCard } from "@/components/monitor-preview-card"
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -123,8 +122,6 @@ export default function VehicleSchedulePage() {
   // 发送控制指令
   async function sendCommand(code: CtlCode, label: string) {
     if (!selected) return
-    // 继续 = 释放手动站点等待（发车）
-    if (code === CtlCode.CONTINUE) releaseVehicleStops(selected.car_id)
     setBusy(true)
     try {
       await carsSetStatus(selected.car_id, code)
@@ -139,7 +136,6 @@ export default function VehicleSchedulePage() {
   // 循迹导航：沿分配的执行路线开始行驶（taskId 即路线 id）
   async function handleTrack() {
     if (!selected || !selectedRoute) return
-    releaseVehicleStops(selected.car_id)
     setBusy(true)
     try {
       await carsRunDemo(selectedRoute.id, selected.car_id)

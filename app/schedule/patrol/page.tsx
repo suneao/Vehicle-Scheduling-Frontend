@@ -30,7 +30,6 @@ import {
   getRouteAssignments,
   setRouteAssignment,
 } from "@/lib/route-assignments"
-import { releaseVehicleStops } from "@/lib/virtual-vehicles"
 import { MonitorPreviewCard } from "@/components/monitor-preview-card"
 import {
   ArrowLeftIcon,
@@ -145,8 +144,6 @@ export default function PatrolSchedulePage() {
 
   async function sendCommand(code: CtlCode, label: string) {
     if (!selected) return
-    // 继续 = 释放手动站点等待（发车）
-    if (code === CtlCode.CONTINUE) releaseVehicleStops(selected.car_id)
     setBusy(true)
     try {
       await carsSetStatus(selected.car_id, code)
@@ -161,7 +158,6 @@ export default function PatrolSchedulePage() {
   // 循迹导航：沿分配的巡逻路线开始行驶（taskId 即路线 id）
   async function handleTrack() {
     if (!selected || !selectedRoute) return
-    releaseVehicleStops(selected.car_id)
     setBusy(true)
     try {
       await carsRunDemo(selectedRoute.id, selected.car_id)
