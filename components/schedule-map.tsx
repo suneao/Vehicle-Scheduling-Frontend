@@ -77,13 +77,13 @@ export function ScheduleMap({ vehicles, onSelect, selectedId, assignedRoute, sta
     : []
   const onRoute =
     selectedVehicle && routePathForCheck.length >= 2
-      ? projectToPath(routePathForCheck, [selectedVehicle.x, selectedVehicle.y])
+      ? projectToPath(routePathForCheck, [selectedVehicle.lon, selectedVehicle.lat])
           .distance <= ON_ROUTE_THRESHOLD
       : false
   // 兜底直线（车辆当前位置 → 路线起点）
   const fallbackNavPath: [number, number][] | null =
     !onRoute && selectedVehicle && assignedRoute && assignedRoute.points.length >= 2
-      ? [[selectedVehicle.x, selectedVehicle.y], assignedRoute.points[0]]
+      ? [[selectedVehicle.lon, selectedVehicle.lat], assignedRoute.points[0]]
       : null
   // 有效导航路径：已规划用结果，否则用兜底直线；在路线上时无导航
   const effectiveNavPath: [number, number][] | null = onRoute
@@ -283,9 +283,9 @@ export function ScheduleMap({ vehicles, onSelect, selectedId, assignedRoute, sta
 
     if (points.length >= 2) {
       const v = vehicles.find((item) => item.car_id === selectedId)
-      const proj = v ? projectToPath(points, [v.x, v.y]) : null
+      const proj = v ? projectToPath(points, [v.lon, v.lat]) : null
       if (v && proj && proj.distance <= ON_ROUTE_THRESHOLD) {
-        const split = splitPathAt(points, [v.x, v.y])
+        const split = splitPathAt(points, [v.lon, v.lat])
         before = split.before
         after = split.after
         beforeOpacity = startMode === "start" ? 0.3 : 0.15
@@ -352,7 +352,7 @@ export function ScheduleMap({ vehicles, onSelect, selectedId, assignedRoute, sta
     // 已在路线上或数据不足：无需规划
     if (onRoute || !assignedRoute || assignedRoute.points.length < 2 || !selectedVehicle) return
 
-    const origin: [number, number] = [selectedVehicle.x, selectedVehicle.y]
+    const origin: [number, number] = [selectedVehicle.lon, selectedVehicle.lat]
     const dest = assignedRoute.points[0]
 
     const doResolve = () => {
@@ -402,7 +402,7 @@ export function ScheduleMap({ vehicles, onSelect, selectedId, assignedRoute, sta
     let before: [number, number][] | null = null
     let after: [number, number][] = []
     if (navPath && v) {
-      const split = splitPathAt(navPath, [v.x, v.y])
+      const split = splitPathAt(navPath, [v.lon, v.lat])
       before = split.before
       after = split.after
     }
@@ -484,7 +484,7 @@ export function ScheduleMap({ vehicles, onSelect, selectedId, assignedRoute, sta
       }
       const v = vehicles.find((item) => item.car_id === selectedId)
       if (v) {
-        map.setCenter([v.x, v.y])
+        map.setCenter([v.lon, v.lat])
         map.setPitch(0)
         // 放大到局部视角（不低于 18 级）
         if (map.getZoom() < 18) map.setZoom(18)
@@ -547,7 +547,7 @@ export function ScheduleMap({ vehicles, onSelect, selectedId, assignedRoute, sta
 
     for (const v of vehicles) {
       const alive = v.speed > 0
-      const hasAngle = v.angle != null
+      const hasAngle = v.yaw != null
       const isSelected = v.car_id === selectedId
       // WebGL 不可用时地图降级为亮色渲染，marker 固定用亮色主题主色（近黑，非黄色）以保证可见
       // 低电量优先用黄/红标记（选中态仍用绿色突出选中）
@@ -560,8 +560,8 @@ export function ScheduleMap({ vehicles, onSelect, selectedId, assignedRoute, sta
       el.style.cssText = "display:flex;flex-direction:column;align-items:center;cursor:pointer;"
       el.innerHTML = `
         ${v.kind === "robot"
-          ? robotMarkerSvg({ color: base, angle: v.angle, alive, selected: isSelected })
-          : vehicleMarkerSvg({ color: base, angle: v.angle, alive, selected: isSelected })}
+          ? robotMarkerSvg({ color: base, angle: v.yaw, alive, selected: isSelected })
+          : vehicleMarkerSvg({ color: base, angle: v.yaw, alive, selected: isSelected })}
         <span style="
           margin-top:4px;font-size:10px;font-weight:600;
           font-family:monospace;color:#333;
@@ -572,11 +572,11 @@ export function ScheduleMap({ vehicles, onSelect, selectedId, assignedRoute, sta
         <span style="
           font-size:9px;color:#666;
           margin-top:1px;
-        ">${v.speed.toFixed(1)} m/s${hasAngle ? " · " + v.angle?.toFixed(0) + "°" : ""}</span>
+        ">${v.speed.toFixed(1)} m/s${hasAngle ? " · " + v.yaw?.toFixed(0) + "°" : ""}</span>
       `
 
       const marker = new AMap.Marker({
-        position: [v.x, v.y] as [number, number],
+        position: [v.lon, v.lat] as [number, number],
         content: el,
         offset: new AMap.Pixel(0, -25),
         zIndex: isSelected ? 300 : alive ? 200 : 100,

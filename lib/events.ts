@@ -3,8 +3,6 @@
  * 事件 = 指定时间在指定路线上控制某车辆开启/关闭，带优先级（数字越大越优先）
  */
 
-import type { Route } from "@/lib/routes"
-
 export interface ScheduleEvent {
   id: number
   /** 事件名称 */

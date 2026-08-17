@@ -6,6 +6,7 @@ import Link from "next/link"
 import { toast } from "sonner"
 import {
   getRoutes,
+  loadRoutes,
   addRoute,
   updateRoute,
   deleteRoute,
@@ -49,7 +50,7 @@ function MapLoading() {
 }
 
 export default function RoutesPage() {
-  const [routes, setRoutes] = React.useState<Route[]>(() => getRoutes())
+  const [routes, setRoutes] = React.useState<Route[]>([])
   const [selectedId, setSelectedId] = React.useState<number | null>(null)
 
   // 绘制状态
@@ -85,6 +86,15 @@ export default function RoutesPage() {
   function refresh() {
     setRoutes(getRoutes())
   }
+
+  // 首次挂载时从云端加载路线
+  React.useEffect(() => {
+    let cancelled = false
+    loadRoutes().then((list) => {
+      if (!cancelled) setRoutes(list)
+    })
+    return () => { cancelled = true }
+  }, [])
 
   /** 点 p 在线段 ab 上的投影参数 t（t<0 在 a 端外，t>1 在 b 端外） */
   function projectParam(
@@ -291,7 +301,7 @@ export default function RoutesPage() {
   }
 
   // 保存编辑后的路线（名称 + 航点 + 贴路路径）
-  function handleSaveEdit() {
+  async function handleSaveEdit() {
     if (!selected) return
     const clean = editPoints.filter(
       (p) => Number.isFinite(p[0]) && Number.isFinite(p[1])
@@ -302,13 +312,18 @@ export default function RoutesPage() {
     }
     const path = matchRoad(editRoad, clean)
     const hasStops = editStops.some((s) => s != null)
-    updateRoute(selected.id, {
-      name: editName.trim() || selected.name,
-      points: clean,
-      mode: pathMode,
-      ...(path ? { path } : { path: undefined }),
-      ...(hasStops ? { stops: editStops } : { stops: undefined }),
-    })
+    try {
+      await updateRoute(selected.id, {
+        name: editName.trim() || selected.name,
+        points: clean,
+        mode: pathMode,
+        ...(path ? { path } : { path: undefined }),
+        ...(hasStops ? { stops: editStops } : { stops: undefined }),
+      })
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "路线更新失败")
+      return
+    }
     toast.success(path ? "路线已更新（贴路）" : "路线已更新")
     setEditing(false)
     setEditPoints([])
@@ -319,7 +334,7 @@ export default function RoutesPage() {
   }
 
   // 保存新路线
-  function handleSaveDraft() {
+  async function handleSaveDraft() {
     const clean = draftPoints.filter(
       (p) => Number.isFinite(p[0]) && Number.isFinite(p[1])
     )
@@ -328,7 +343,12 @@ export default function RoutesPage() {
       return
     }
     const path = matchRoad(draftRoad, clean)
-    addRoute(draftName.trim(), clean, path, pathMode)
+    try {
+      await addRoute(draftName.trim(), clean, path, pathMode)
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "路线保存失败")
+      return
+    }
     toast.success(path ? "路线已保存（贴路）" : "路线已保存")
     setDrawing(false)
     setDraftName("")
@@ -338,13 +358,18 @@ export default function RoutesPage() {
   }
 
   // 删除路线
-  function handleDelete(id: number) {
+  async function handleDelete(id: number) {
     if (eventUsesRoute(id)) {
       toast.error("该路线被事件引用，无法删除")
       return
     }
     if (!confirm("确认删除该路线？")) return
-    deleteRoute(id)
+    try {
+      await deleteRoute(id)
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "路线删除失败")
+      return
+    }
     if (selectedId === id) {
       setSelectedId(null)
       setEditing(false)

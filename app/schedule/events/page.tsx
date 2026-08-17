@@ -10,8 +10,8 @@ import {
   deleteEvent,
   type ScheduleEvent,
 } from "@/lib/events"
-import { getRoutes } from "@/lib/routes"
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card"
+import { getRoutes, loadRoutes, type Route } from "@/lib/routes"
+import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
@@ -52,15 +52,18 @@ const EMPTY_FORM: EventForm = {
 }
 
 export default function EventsPage() {
-  const [events, setEvents] = React.useState<ScheduleEvent[]>([])
-  const [routes, setRoutes] = React.useState(getRoutes())
+  const [events, setEvents] = React.useState<ScheduleEvent[]>(() => getEvents())
+  const [routes, setRoutes] = React.useState<Route[]>([])
   const [editing, setEditing] = React.useState<ScheduleEvent | null>(null)
   const [form, setForm] = React.useState<EventForm>(EMPTY_FORM)
   const [formOpen, setFormOpen] = React.useState(false)
 
   React.useEffect(() => {
-    setEvents(getEvents())
-    setRoutes(getRoutes())
+    let cancelled = false
+    loadRoutes().then((list) => {
+      if (!cancelled) setRoutes(list)
+    })
+    return () => { cancelled = true }
   }, [])
 
   function refresh() {
@@ -180,7 +183,7 @@ export default function EventsPage() {
             <div className="flex flex-col items-center justify-center gap-3 py-16">
               <CalendarClockIcon className="size-6 text-muted-foreground/20" />
               <p className="text-xs text-muted-foreground/50">暂无事件</p>
-              <p className="text-[10px] text-muted-foreground/30">点击"添加事件"创建调度计划</p>
+              <p className="text-[10px] text-muted-foreground/30">点击“添加事件”创建调度计划</p>
             </div>
           ) : (
             <div className="flex flex-col">

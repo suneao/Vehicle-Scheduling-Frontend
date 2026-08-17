@@ -128,8 +128,8 @@ export function MapView({ vehicles }: MapViewProps) {
         (webglUsed === false ? "#212121" : "var(--color-primary,#f59e0b)")
       el.innerHTML = `
         ${v.kind === "robot"
-          ? robotMarkerSvg({ color: dropColor, angle: v.angle, alive })
-          : vehicleMarkerSvg({ color: dropColor, angle: v.angle, alive })}
+          ? robotMarkerSvg({ color: dropColor, angle: v.yaw, alive })
+          : vehicleMarkerSvg({ color: dropColor, angle: v.yaw, alive })}
         <span style="
           margin-top:3px;font-size:10px;font-weight:600;
           font-family:monospace;color:#333;
@@ -140,7 +140,7 @@ export function MapView({ vehicles }: MapViewProps) {
       `
 
       const marker = new AMap.Marker({
-        position: [v.x, v.y] as [number, number],
+        position: [v.lon, v.lat] as [number, number],
         content: el,
         offset: new AMap.Pixel(0, -18),
         zIndex: alive ? 200 : 100,

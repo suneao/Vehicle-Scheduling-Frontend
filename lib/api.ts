@@ -44,6 +44,13 @@ export function decodeToken(token: string): Record<string, unknown> | null {
   }
 }
 
+/** 判断 token 是否已过期（exp 为秒级时间戳） */
+export function isTokenExpired(token: string): boolean {
+  const payload = decodeToken(token)
+  if (!payload || typeof payload.exp !== "number") return false
+  return payload.exp * 1000 <= Date.now()
+}
+
 /** 从当前 token 获取身份信息（id / name / isAdmin），失败返回 null */
 export function getCurrentUser(): { id?: number; name?: string; isAdmin?: boolean } | null {
   const token = getToken()
@@ -99,8 +106,7 @@ export async function request<T = unknown>(
     "/api/oauth/register",
     "/api/oauth/getcode",
     "/api/oauth/forget",
-    "/api/admin/cars/position/upload",
-    "/api/admin/cars/position/all",
+    "/report/car_status",
     "/api/test/login",
   ]
   const isPublic = publicEndpoints.some((p) => endpoint.startsWith(p))
@@ -116,13 +122,27 @@ export async function request<T = unknown>(
   const res = await fetch(url, { ...options, headers })
 
   if (res.status === 401 && token) {
+    if (typeof window !== "undefined") {
+      console.warn(`[api] ${options.method ?? "GET"} ${endpoint} -> 401 正在清除 token 并跳转登录`)
+      // 先通知应用更新鉴权状态（客户端跳转，不清控制台）
+      window.dispatchEvent(new CustomEvent("auth:unauthorized"))
+      // 兜底：若事件监听未及时处理，强制整页跳转，避免停留在假登录态
+      setTimeout(() => {
+        if (typeof window !== "undefined" && window.location.pathname !== "/login") {
+          window.location.href = "/login"
+        }
+      }, 1500)
+    }
     clearToken()
-    if (typeof window !== "undefined") window.location.href = "/login"
     throw new ApiError(401, "登录已过期，请重新登录")
   }
 
   if (res.status >= 400) {
     const body = await res.json().catch(() => ({}))
+    // 调试日志：定位哪个接口返回了非 2xx
+    if (typeof window !== "undefined") {
+      console.warn(`[api] ${options.method ?? "GET"} ${endpoint} -> ${res.status}`, body)
+    }
     throw new ApiError(res.status, body.detail || body.msg || "请求失败")
   }
 
@@ -232,89 +252,61 @@ export async function commonsGetProcessList() {
   return request("/api/commons/processlist")
 }
 
-// ==================== 3. 车辆模块 (Admin Cars) ====================
+// ==================== 3. 车辆模块 (Cars) ====================
 
-/** ctl_code 控制指令枚举 */
-export enum CtlCode {
-  ACTIVATE = 0,
-  PAUSE = 1,
-  CONTINUE = 2,
-  CANCEL = 3,
-  INACTIVATE = 4,
-}
+/** 车辆控制指令（对应后端 CarCommandIn.command） */
+export type CarCommand = "start" | "stop" | "pause" | "resume" | "goto"
 
-/** POST /api/admin/cars/setStatus — 设置小车运行状态 */
-export async function carsSetStatus(carId: number, ctlCode: CtlCode) {
-  return request(
-    `/api/admin/cars/setStatus?car_id=${carId}&ctl_code=${ctlCode}`,
-    { method: "POST" }
-  )
-}
-
-/** POST /api/admin/cars/runDemo — 启动演示轨迹任务 */
-export async function carsRunDemo(taskId: number, carId = 1) {
-  return request(
-    `/api/admin/cars/runDemo?taskId=${taskId}&car_id=${carId}`,
-    { method: "POST" }
-  )
-}
-
-/** POST /api/admin/cars/processImage — 车载图像识别 */
-export async function carsProcessImage(uploadImage?: File) {
-  const formData = new FormData()
-  if (uploadImage) {
-    formData.append("uploadImage", uploadImage)
-  }
-  return request("/api/admin/cars/processImage", {
+/** POST /api/cars/{car_id}/command — 下发控制指令 */
+export async function carsSendCommand(
+  carId: number,
+  command: CarCommand,
+  pathId?: number,
+  params?: Record<string, unknown>
+) {
+  return request(`/api/cars/${carId}/command`, {
     method: "POST",
-    headers: {}, // 让浏览器自动设置 multipart boundary
-    body: formData,
+    body: JSON.stringify({ command, path_id: pathId, params }),
   })
 }
 
-/** 小车位置数据 */
+/** 小车位置数据（对齐后端 /api/cars/list 返回结构） */
 export interface CarPosition {
   car_id: number
-  x: number
-  y: number
+  name?: string
+  /** 运行状态（后端 status 字段，具体语义以后端为准） */
+  status?: number
+  /** 经度 */
+  lon: number
+  /** 纬度 */
+  lat: number
+  /** 航向角（度） */
+  yaw?: number
+  /** 速度（m/s） */
   speed: number
-  angle?: number
   /** 电量百分比 0-100（后端未提供时为 undefined） */
   battery?: number
-  /** 类型：vehicle = 车辆；robot = 机器狗（后端未提供时为 undefined，默认按车辆处理） */
+  /** 类型：vehicle = 车辆；robot = 机器狗（后端暂未提供，预留字段） */
   kind?: "vehicle" | "robot"
-  update_time?: string
+  /** 视频流地址（可选） */
+  video_streams?: Record<string, string>
 }
 
-/** POST /api/admin/cars/position/upload — 上报小车位置（免鉴权） */
-export async function carsUploadPosition(position: {
-  car_id: number
-  x: number
-  y: number
-  speed: number
-}) {
-  return request<CarPosition>("/api/admin/cars/position/upload", {
-    method: "POST",
-    body: JSON.stringify(position),
-  })
-}
-
-/** GET /api/admin/cars/position/all — 获取全部小车实时位置（免鉴权） */
-export async function carsGetAllPositions() {
+/** GET /api/cars/list — 获取全部小车完整信息（含 GPS 经纬度/航向/电量，需鉴权） */
+export async function carsGetAllPositions(): Promise<ApiResponse<CarPosition[]>> {
   // 2 秒超时：后端不可用时避免轮询挂起，返回空结果
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 2000)
   try {
-    return await request<Record<string, CarPosition>>(
-      "/api/admin/cars/position/all",
-      { signal: controller.signal }
-    )
+    return await request<CarPosition[]>("/api/cars/list", {
+      signal: controller.signal,
+    })
   } catch {
     // 请求失败/超时：返回空结果，交由页面显示「无车辆/机器狗连接」
     return {
       code: 200,
       msg: "车辆位置获取失败",
-      data: {},
+      data: [],
     }
   } finally {
     clearTimeout(timer)
@@ -358,33 +350,33 @@ export interface QueryOrderParams {
   user_id?: number[]
 }
 
-/** POST /api/admin/order/create — 创建订单 */
+/** POST /api/order/create — 创建订单 */
 export async function adminOrderCreate(params: CreateOrderParams) {
-  return request("/api/admin/order/create", {
+  return request("/api/order/create", {
     method: "POST",
     body: JSON.stringify(params),
   })
 }
 
-/** POST /api/admin/order/update — 更新订单 */
+/** POST /api/order/update — 更新订单 */
 export async function adminOrderUpdate(params: UpdateOrderParams) {
-  return request("/api/admin/order/update", {
+  return request("/api/order/update", {
     method: "POST",
     body: JSON.stringify(params),
   })
 }
 
-/** POST /api/admin/order/getlist — 获取订单列表 */
+/** POST /api/order/getlist — 获取订单列表 */
 export async function adminOrderGetList(params: QueryOrderParams) {
-  return request("/api/admin/order/getlist", {
+  return request("/api/order/getlist", {
     method: "POST",
     body: JSON.stringify(params),
   })
 }
 
-/** DELETE /api/admin/order/delete — 删除订单 */
+/** DELETE /api/order/delete — 删除订单 */
 export async function adminOrderDelete(orderId: number) {
-  return request(`/api/admin/order/delete?order_id=${orderId}`, {
+  return request(`/api/order/delete?order_id=${orderId}`, {
     method: "DELETE",
   })
 }
@@ -397,41 +389,41 @@ export interface QueryItemsParams {
   pagesize: number
 }
 
-/** POST /api/admin/items/create — 添加物料 */
+/** POST /api/items/create — 添加物料 */
 export async function adminItemsCreate(file: File) {
   const formData = new FormData()
   formData.append("file", file)
-  return request("/api/admin/items/create", {
+  return request("/api/items/create", {
     method: "POST",
     headers: {},
     body: formData,
   })
 }
 
-/** GET /api/admin/items/getitems — 获取物料搜索列表 */
+/** GET /api/items/getitems — 获取物料搜索列表 */
 export async function adminItemsGetForSearch() {
-  return request("/api/admin/items/getitems")
+  return request("/api/items/getitems")
 }
 
-/** POST /api/admin/items/getitems — 查询物料 */
+/** POST /api/items/getitems — 查询物料 */
 export async function adminItemsGetList(params: QueryItemsParams) {
-  return request("/api/admin/items/getitems", {
+  return request("/api/items/getitems", {
     method: "POST",
     body: JSON.stringify(params),
   })
 }
 
-/** DELETE /api/admin/items/delete — 删除物料 */
+/** DELETE /api/items/delete — 删除物料 */
 export async function adminItemsDelete(itemId: number) {
-  return request(`/api/admin/items/delete?item_id=${itemId}`, {
+  return request(`/api/items/delete?item_id=${itemId}`, {
     method: "DELETE",
   })
 }
 
-/** GET /api/admin/items/getitemprocess — 获取物料工序 */
+/** GET /api/items/getitemprocess — 获取物料工序 */
 export async function adminItemsGetProcess(itemId: number) {
   return request(
-    `/api/admin/items/getitemprocess?item_id=${itemId}`
+    `/api/items/getitemprocess?item_id=${itemId}`
   )
 }
 
@@ -454,22 +446,22 @@ export interface UserUpdateParams {
   address_id?: number
 }
 
-/** GET /api/admin/user/getuserlist — 获取用户列表 */
+/** GET /api/user/getuserlist — 获取用户列表 */
 export async function adminGetUserList() {
-  return request<UserListItem[]>("/api/admin/user/getuserlist")
+  return request<UserListItem[]>("/api/user/getuserlist")
 }
 
-/** PUT /api/admin/user/{user_id} — 管理员修改指定用户信息，返回修改后的完整用户 */
+/** PUT /api/user/{user_id} — 管理员修改指定用户信息，返回修改后的完整用户 */
 export async function adminUserUpdate(userId: number, params: UserUpdateParams) {
-  return request<UserInfo>(`/api/admin/user/${userId}`, {
+  return request<UserInfo>(`/api/user/${userId}`, {
     method: "PUT",
     body: JSON.stringify(params),
   })
 }
 
-/** DELETE /api/admin/user/{user_id} — 管理员删除指定用户账号 */
+/** DELETE /api/user/{user_id} — 管理员删除指定用户账号 */
 export async function adminUserDelete(userId: number) {
-  return request(`/api/admin/user/${userId}`, {
+  return request(`/api/user/${userId}`, {
     method: "DELETE",
   })
 }
@@ -574,6 +566,177 @@ export async function testLogin(username: string, password: string) {
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: body.toString(),
   })
+}
+
+// ==================== 10. 路线/站点/途经点模块 (Admin Paths/Sites/Waypoints) ====================
+
+/** 路线节点引用（site = 站点，waypoint = 途经点） */
+export interface PathNodeRef {
+  type: "site" | "waypoint"
+  id: number
+}
+
+/** 后端路线记录 */
+export interface PathRecord {
+  id: number
+  name: string
+  path_type: string
+  node_chain: PathNodeRef[]
+  car_id?: number
+  created_at?: string
+}
+
+export interface PathCreatePayload {
+  name: string
+  path_type: string
+  node_chain: PathNodeRef[]
+  car_id?: number
+}
+
+export interface PathUpdatePayload {
+  name?: string
+  path_type?: string
+  node_chain?: PathNodeRef[]
+  car_id?: number
+}
+
+/** 后端站点记录 */
+export interface SiteRecord {
+  id: number
+  name: string
+  lon: number
+  lat: number
+  dwell_time?: number
+  description?: string | null
+  created_at?: string
+}
+
+export interface SiteCreatePayload {
+  name: string
+  lon: number
+  lat: number
+  dwell_time?: number
+  description?: string
+}
+
+export interface SiteUpdatePayload {
+  name?: string
+  lon?: number
+  lat?: number
+  dwell_time?: number
+  description?: string
+}
+
+/** 后端途经点记录 */
+export interface WaypointRecord {
+  id: number
+  name: string
+  lon: number
+  lat: number
+  description?: string | null
+  created_at?: string
+}
+
+export interface WaypointCreatePayload {
+  name: string
+  lon: number
+  lat: number
+  description?: string
+}
+
+export interface WaypointUpdatePayload {
+  name?: string
+  lon?: number
+  lat?: number
+  description?: string
+}
+
+/** GET /admin/paths/ — 获取所有路线（可筛选类型或小车） */
+export async function pathsList(params?: { path_type?: string; car_id?: number }) {
+  const query = new URLSearchParams()
+  if (params?.path_type) query.set("path_type", params.path_type)
+  if (params?.car_id != null) query.set("car_id", String(params.car_id))
+  const qs = query.toString()
+  // 注意：不带尾斜杠，由 next.config 重写规则映射回后端带斜杠的地址，避免跨域 307 丢 token
+  return request<PathRecord[]>(`/admin/paths${qs ? `?${qs}` : ""}`)
+}
+
+/** GET /admin/paths/{path_id} — 获取单条路线详情 */
+export async function pathsGet(pathId: number) {
+  return request<PathRecord>(`/admin/paths/${pathId}`)
+}
+
+/** POST /admin/paths/ — 保存路线 */
+export async function pathsCreate(data: PathCreatePayload) {
+  return request<PathRecord>("/admin/paths", {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+}
+
+/** PUT /admin/paths/{path_id} — 修改路线 */
+export async function pathsUpdate(pathId: number, data: PathUpdatePayload) {
+  return request<PathRecord>(`/admin/paths/${pathId}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  })
+}
+
+/** DELETE /admin/paths/{path_id} — 删除路线 */
+export async function pathsDelete(pathId: number) {
+  return request(`/admin/paths/${pathId}`, { method: "DELETE" })
+}
+
+/** GET /admin/sites/ — 获取所有站点 */
+export async function sitesList() {
+  return request<SiteRecord[]>("/admin/sites")
+}
+
+/** POST /admin/sites/ — 新增站点 */
+export async function sitesCreate(data: SiteCreatePayload) {
+  return request<SiteRecord>("/admin/sites", {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+}
+
+/** PUT /admin/sites/{site_id} — 修改站点 */
+export async function sitesUpdate(siteId: number, data: SiteUpdatePayload) {
+  return request<SiteRecord>(`/admin/sites/${siteId}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  })
+}
+
+/** DELETE /admin/sites/{site_id} — 删除站点 */
+export async function sitesDelete(siteId: number) {
+  return request(`/admin/sites/${siteId}`, { method: "DELETE" })
+}
+
+/** GET /admin/waypoints/ — 获取所有途经点 */
+export async function waypointsList() {
+  return request<WaypointRecord[]>("/admin/waypoints")
+}
+
+/** POST /admin/waypoints/ — 新增途经点 */
+export async function waypointsCreate(data: WaypointCreatePayload) {
+  return request<WaypointRecord>("/admin/waypoints", {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+}
+
+/** PUT /admin/waypoints/{wp_id} — 修改途经点 */
+export async function waypointsUpdate(wpId: number, data: WaypointUpdatePayload) {
+  return request<WaypointRecord>(`/admin/waypoints/${wpId}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  })
+}
+
+/** DELETE /admin/waypoints/{wp_id} — 删除途经点 */
+export async function waypointsDelete(wpId: number) {
+  return request(`/admin/waypoints/${wpId}`, { method: "DELETE" })
 }
 
 // ==================== 便捷导出：兼容旧版简写 ====================

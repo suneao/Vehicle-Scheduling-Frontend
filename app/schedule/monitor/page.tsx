@@ -73,8 +73,8 @@ function MonitorContent() {
       try {
         const res = await carsGetAllPositions()
         if (cancelled) return
-        const data = (res.data as Record<string, CarPosition>) ?? {}
-        const found = Object.values(data).find((v) => v.car_id === carId) ?? null
+        const data = res.data ?? []
+        const found = data.find((v) => v.car_id === carId) ?? null
         setVehicle(found)
       } catch {
         /* ignore */
@@ -299,7 +299,7 @@ function MonitorContent() {
               {vehicle ? (
                 <>
                   <InfoRow label="坐标">
-                    ({vehicle.x.toFixed(5)}, {vehicle.y.toFixed(5)})
+                    ({vehicle.lon.toFixed(5)}, {vehicle.lat.toFixed(5)})
                   </InfoRow>
                   <InfoRow label="速度">{vehicle.speed.toFixed(2)} m/s</InfoRow>
                   {vehicle.battery != null && (
@@ -309,11 +309,8 @@ function MonitorContent() {
                       </span>
                     </InfoRow>
                   )}
-                  {vehicle.angle != null && (
-                    <InfoRow label="朝向">{vehicle.angle.toFixed(1)}°</InfoRow>
-                  )}
-                  {vehicle.update_time && (
-                    <InfoRow label="更新">{vehicle.update_time}</InfoRow>
+                  {vehicle.yaw != null && (
+                    <InfoRow label="朝向">{vehicle.yaw.toFixed(1)}°</InfoRow>
                   )}
                 </>
               ) : (

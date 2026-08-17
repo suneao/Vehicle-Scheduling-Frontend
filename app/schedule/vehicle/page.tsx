@@ -6,12 +6,11 @@ import Link from "next/link"
 import { toast } from "sonner"
 import {
   carsGetAllPositions,
-  carsSetStatus,
-  carsRunDemo,
-  CtlCode,
+  carsSendCommand,
+  type CarCommand,
   type CarPosition,
 } from "@/lib/api"
-import { getRoutes, type Route } from "@/lib/routes"
+import { loadRoutes, type Route } from "@/lib/routes"
 import {
   getRouteAssignments,
   setRouteAssignment,
@@ -67,10 +66,19 @@ export default function VehicleSchedulePage() {
   const [selected, setSelected] = React.useState<CarPosition | null>(null)
   const [busy, setBusy] = React.useState(false)
   const [startMode, setStartMode] = React.useState<"start" | "current">("start")
-  const [routes] = React.useState<Route[]>(() => getRoutes())
+  const [routes, setRoutes] = React.useState<Route[]>([])
   const [assignments, setAssignments] = React.useState<Record<number, number>>(
     () => getRouteAssignments()
   )
+
+  // 首次挂载时从云端加载路线
+  React.useEffect(() => {
+    let cancelled = false
+    loadRoutes().then((list) => {
+      if (!cancelled) setRoutes(list)
+    })
+    return () => { cancelled = true }
+  }, [])
 
   // 选中车辆/取消选中：切换时重置循迹起始方式
   function handleSelect(vehicle: CarPosition | null) {
@@ -102,8 +110,7 @@ export default function VehicleSchedulePage() {
       try {
         const res = await carsGetAllPositions()
         if (!cancelled) {
-          const data = (res.data as Record<string, CarPosition>) ?? {}
-          const list = Object.values(data).filter((v) => v.kind !== "robot")
+          const list = (res.data ?? []).filter((v) => v.kind !== "robot")
           setVehicles(list)
           // 同步更新选中车辆：若选中车辆仍在列表中，刷新其实时数据
           setSelected((prev) => {
@@ -120,11 +127,11 @@ export default function VehicleSchedulePage() {
   }, [])
 
   // 发送控制指令
-  async function sendCommand(code: CtlCode, label: string) {
+  async function sendCommand(command: CarCommand, label: string) {
     if (!selected) return
     setBusy(true)
     try {
-      await carsSetStatus(selected.car_id, code)
+      await carsSendCommand(selected.car_id, command)
       toast.success(`车辆 #${selected.car_id}: ${label}`)
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "指令发送失败")
@@ -133,12 +140,14 @@ export default function VehicleSchedulePage() {
     }
   }
 
-  // 循迹导航：沿分配的执行路线开始行驶（taskId 即路线 id）
+  // 循迹导航：下发 goto 指令沿分配的执行路线行驶
   async function handleTrack() {
     if (!selected || !selectedRoute) return
     setBusy(true)
     try {
-      await carsRunDemo(selectedRoute.id, selected.car_id)
+      await carsSendCommand(selected.car_id, "goto", selectedRoute.id, {
+        mode: startMode,
+      })
       toast.success(
         startMode === "current"
           ? `车辆 #${selected.car_id} 已从当前位置开始循迹「${selectedRoute.name}」`
@@ -151,12 +160,13 @@ export default function VehicleSchedulePage() {
     }
   }
 
+  // 后端仅支持 start/stop/pause/resume/goto，此处将「取消任务/休眠」均映射为 stop
   const commands = [
-    { code: CtlCode.ACTIVATE, label: "启动", variant: "default" as const },
-    { code: CtlCode.PAUSE, label: "暂停", variant: "secondary" as const },
-    { code: CtlCode.CONTINUE, label: "继续", variant: "secondary" as const },
-    { code: CtlCode.CANCEL, label: "取消任务", variant: "destructive" as const },
-    { code: CtlCode.INACTIVATE, label: "休眠", variant: "ghost" as const },
+    { command: "start" as CarCommand, label: "启动", variant: "default" as const },
+    { command: "pause" as CarCommand, label: "暂停", variant: "secondary" as const },
+    { command: "resume" as CarCommand, label: "继续", variant: "secondary" as const },
+    { command: "stop" as CarCommand, label: "取消任务", variant: "destructive" as const },
+    { command: "stop" as CarCommand, label: "休眠", variant: "ghost" as const },
   ]
 
   return (
@@ -286,7 +296,7 @@ function VehicleRow({
             {vehicle.car_id}
           </p>
           <p className="truncate font-mono text-[11px] text-muted-foreground/40 tabular-nums">
-            {vehicle.x.toFixed(4)}, {vehicle.y.toFixed(4)}
+            {vehicle.lon.toFixed(4)}, {vehicle.lat.toFixed(4)}
           </p>
         </div>
       </div>
@@ -321,8 +331,8 @@ function VehicleDetail({
 }: {
   vehicle: CarPosition
   busy: boolean
-  commands: { code: CtlCode; label: string; variant: "default" | "secondary" | "destructive" | "ghost" }[]
-  onCommand: (code: CtlCode, label: string) => void
+  commands: { command: CarCommand; label: string; variant: "default" | "secondary" | "destructive" | "ghost" }[]
+  onCommand: (command: CarCommand, label: string) => void
   onBack: () => void
   routes: Route[]
   assignedRouteId: number | null
@@ -346,7 +356,7 @@ function VehicleDetail({
     )
     if (clean.length < 2) return false
     return (
-      projectToPath(clean, [vehicle.x, vehicle.y]).distance <=
+      projectToPath(clean, [vehicle.lon, vehicle.lat]).distance <=
       ON_ROUTE_THRESHOLD
     )
   }, [assignedRoute, vehicle])
@@ -372,7 +382,7 @@ function VehicleDetail({
         </CardHeader>
         <CardContent className="flex flex-col gap-2.5">
           <InfoRow icon={MapPinIcon} label="坐标">
-            ({vehicle.x.toFixed(5)}, {vehicle.y.toFixed(5)})
+            ({vehicle.lon.toFixed(5)}, {vehicle.lat.toFixed(5)})
           </InfoRow>
           <InfoRow icon={GaugeIcon} label="速度">
             {vehicle.speed.toFixed(2)} m/s
@@ -384,14 +394,9 @@ function VehicleDetail({
               </span>
             </InfoRow>
           )}
-          {vehicle.angle != null && (
+          {vehicle.yaw != null && (
             <InfoRow icon={NavigationIcon} label="朝向">
-              {vehicle.angle.toFixed(1)}°
-            </InfoRow>
-          )}
-          {vehicle.update_time && (
-            <InfoRow icon={CarIcon} label="更新">
-              {vehicle.update_time}
+              {vehicle.yaw.toFixed(1)}°
             </InfoRow>
           )}
         </CardContent>
@@ -490,12 +495,12 @@ function VehicleDetail({
         <CardContent className="flex flex-col gap-1.5">
           {commands.map((cmd) => (
             <Button
-              key={cmd.code}
+              key={cmd.label}
               variant={cmd.variant}
               size="sm"
               className="w-full justify-start"
               disabled={busy}
-              onClick={() => onCommand(cmd.code, cmd.label)}
+              onClick={() => onCommand(cmd.command, cmd.label)}
             >
               {cmd.label}
             </Button>

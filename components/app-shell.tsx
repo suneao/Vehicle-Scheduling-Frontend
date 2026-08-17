@@ -14,7 +14,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   // 全局鉴权守卫：未登录访问任何受保护页面时跳转登录页
   React.useEffect(() => {
-    if (!isLoading && !isAuthenticated) {
+    if (!isLoading && !isAuthenticated && !AUTH_PAGES.includes(pathname)) {
+      console.warn("[shell] guard: redirect to /login from", pathname)
       router.replace("/login")
     }
   }, [isLoading, isAuthenticated, router, pathname])

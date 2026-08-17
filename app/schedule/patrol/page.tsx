@@ -6,9 +6,8 @@ import Link from "next/link"
 import { toast } from "sonner"
 import {
   carsGetAllPositions,
-  carsSetStatus,
-  carsRunDemo,
-  CtlCode,
+  carsSendCommand,
+  type CarCommand,
   type CarPosition,
 } from "@/lib/api"
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card"
@@ -25,7 +24,7 @@ import {
   SelectLabel,
   SelectSeparator,
 } from "@/components/ui/select"
-import { getRoutes, type Route } from "@/lib/routes"
+import { loadRoutes, type Route } from "@/lib/routes"
 import {
   getRouteAssignments,
   setRouteAssignment,
@@ -71,10 +70,19 @@ export default function PatrolSchedulePage() {
   const [selected, setSelected] = React.useState<CarPosition | null>(null)
   const [busy, setBusy] = React.useState(false)
   const [startMode, setStartMode] = React.useState<"start" | "current">("start")
-  const [routes] = React.useState<Route[]>(() => getRoutes())
+  const [routes, setRoutes] = React.useState<Route[]>([])
   const [assignments, setAssignments] = React.useState<Record<number, number>>(
     () => getRouteAssignments()
   )
+
+  // 首次挂载时从云端加载路线
+  React.useEffect(() => {
+    let cancelled = false
+    loadRoutes().then((list) => {
+      if (!cancelled) setRoutes(list)
+    })
+    return () => { cancelled = true }
+  }, [])
 
   // 选中机器狗/取消选中：切换时重置循迹起始方式
   function handleSelect(robot: CarPosition | null) {
@@ -125,8 +133,7 @@ export default function PatrolSchedulePage() {
       try {
         const res = await carsGetAllPositions()
         if (!cancelled) {
-          const data = (res.data as Record<string, CarPosition>) ?? {}
-          const list = Object.values(data).filter((v) => v.kind === "robot")
+          const list = (res.data ?? []).filter((v) => v.kind === "robot")
           setRobots(list)
           // 同步更新选中机器狗：若仍在线则刷新其实时数据
           setSelected((prev) => {
@@ -142,11 +149,11 @@ export default function PatrolSchedulePage() {
     return () => { cancelled = true; clearInterval(t) }
   }, [])
 
-  async function sendCommand(code: CtlCode, label: string) {
+  async function sendCommand(command: CarCommand, label: string) {
     if (!selected) return
     setBusy(true)
     try {
-      await carsSetStatus(selected.car_id, code)
+      await carsSendCommand(selected.car_id, command)
       toast.success(`机器狗 #${selected.car_id}: ${label}`)
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "指令发送失败")
@@ -155,12 +162,14 @@ export default function PatrolSchedulePage() {
     }
   }
 
-  // 循迹导航：沿分配的巡逻路线开始行驶（taskId 即路线 id）
+  // 循迹导航：下发 goto 指令沿分配的巡逻路线行驶
   async function handleTrack() {
     if (!selected || !selectedRoute) return
     setBusy(true)
     try {
-      await carsRunDemo(selectedRoute.id, selected.car_id)
+      await carsSendCommand(selected.car_id, "goto", selectedRoute.id, {
+        mode: startMode,
+      })
       toast.success(
         startMode === "current"
           ? `机器狗 #${selected.car_id} 已从当前位置开始循迹「${selectedRoute.name}」`
@@ -173,12 +182,13 @@ export default function PatrolSchedulePage() {
     }
   }
 
+  // 后端仅支持 start/stop/pause/resume/goto，此处将「停止巡逻/休眠」均映射为 stop
   const commands = [
-    { code: CtlCode.ACTIVATE, label: "启动巡逻", variant: "default" as const, icon: PlayIcon },
-    { code: CtlCode.PAUSE, label: "暂停", variant: "secondary" as const, icon: PauseIcon },
-    { code: CtlCode.CONTINUE, label: "继续", variant: "secondary" as const, icon: RefreshCwIcon },
-    { code: CtlCode.CANCEL, label: "停止巡逻", variant: "destructive" as const, icon: SquareIcon },
-    { code: CtlCode.INACTIVATE, label: "休眠", variant: "ghost" as const },
+    { command: "start" as CarCommand, label: "启动巡逻", variant: "default" as const, icon: PlayIcon },
+    { command: "pause" as CarCommand, label: "暂停", variant: "secondary" as const, icon: PauseIcon },
+    { command: "resume" as CarCommand, label: "继续", variant: "secondary" as const, icon: RefreshCwIcon },
+    { command: "stop" as CarCommand, label: "停止巡逻", variant: "destructive" as const, icon: SquareIcon },
+    { command: "stop" as CarCommand, label: "休眠", variant: "ghost" as const },
   ]
 
   return (
@@ -313,7 +323,7 @@ function RobotRow({
             {robot.car_id}
           </p>
           <p className="truncate font-mono text-[11px] text-muted-foreground/40 tabular-nums">
-            {robot.x.toFixed(4)}, {robot.y.toFixed(4)}
+            {robot.lon.toFixed(4)}, {robot.lat.toFixed(4)}
           </p>
         </div>
       </div>
@@ -348,8 +358,8 @@ function RobotDetail({
 }: {
   robot: CarPosition
   busy: boolean
-  commands: { code: CtlCode; label: string; variant: "default" | "secondary" | "destructive" | "ghost"; icon?: React.ComponentType<{ className?: string }> }[]
-  onCommand: (code: CtlCode, label: string) => void
+  commands: { command: CarCommand; label: string; variant: "default" | "secondary" | "destructive" | "ghost"; icon?: React.ComponentType<{ className?: string }> }[]
+  onCommand: (command: CarCommand, label: string) => void
   onBack: () => void
   routes: Route[]
   assignedRouteId: number | null
@@ -373,7 +383,7 @@ function RobotDetail({
     )
     if (clean.length < 2) return false
     return (
-      projectToPath(clean, [robot.x, robot.y]).distance <=
+      projectToPath(clean, [robot.lon, robot.lat]).distance <=
       ON_ROUTE_THRESHOLD
     )
   }, [assignedRoute, robot])
@@ -399,7 +409,7 @@ function RobotDetail({
         </CardHeader>
         <CardContent className="flex flex-col gap-2.5">
           <InfoRow icon={MapPinIcon} label="坐标">
-            ({robot.x.toFixed(5)}, {robot.y.toFixed(5)})
+            ({robot.lon.toFixed(5)}, {robot.lat.toFixed(5)})
           </InfoRow>
           <InfoRow icon={GaugeIcon} label="速度">
             {robot.speed.toFixed(2)} m/s
@@ -411,14 +421,9 @@ function RobotDetail({
               </span>
             </InfoRow>
           )}
-          {robot.angle != null && (
+          {robot.yaw != null && (
             <InfoRow icon={NavigationIcon} label="朝向">
-              {robot.angle.toFixed(1)}°
-            </InfoRow>
-          )}
-          {robot.update_time && (
-            <InfoRow icon={BotIcon} label="更新">
-              {robot.update_time}
+              {robot.yaw.toFixed(1)}°
             </InfoRow>
           )}
         </CardContent>
@@ -517,12 +522,12 @@ function RobotDetail({
         <CardContent className="flex flex-col gap-1.5">
           {commands.map((cmd) => (
             <Button
-              key={cmd.code}
+              key={cmd.label}
               variant={cmd.variant}
               size="sm"
               className="w-full justify-start"
               disabled={busy}
-              onClick={() => onCommand(cmd.code, cmd.label)}
+              onClick={() => onCommand(cmd.command, cmd.label)}
             >
               {cmd.icon && <cmd.icon data-icon="inline-start" />}
               {cmd.label}

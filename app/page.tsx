@@ -71,7 +71,10 @@ export default function DashboardPage() {
         const res = await carsGetAllPositions().catch(() => null)
         if (cancelled) return
 
-        const newPositions = (res?.data as Record<string, CarPosition>) || {}
+        const newPositions: Record<string, CarPosition> = {}
+        for (const v of (res?.data ?? []) as CarPosition[]) {
+          newPositions[v.car_id] = v
+        }
         const oldCount = prevCountRef.current
         const newCount = Object.keys(newPositions).length
         if (newCount !== oldCount) {
@@ -313,7 +316,7 @@ function VehicleRow({ car }: { car: CarPosition }) {
             {car.car_id}
           </p>
           <p className="truncate font-mono text-[11px] text-muted-foreground/40 tabular-nums">
-            {car.x.toFixed(1)}, {car.y.toFixed(1)}
+            {car.lon.toFixed(1)}, {car.lat.toFixed(1)}
           </p>
         </div>
       </div>
