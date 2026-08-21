@@ -5,6 +5,8 @@
  */
 
 import {
+  mapsList,
+  mapsCreate,
   pathsList,
   pathsCreate,
   pathsUpdate,
@@ -42,6 +44,8 @@ export interface Route {
   mode?: "road" | "curve" | "polyline"
   /** 路线颜色（由 id 确定性派生，不依赖本地存储） */
   color?: string
+  /** 后端地图 id（更新时复用，后端 Path/Site/Waypoint 均需 map_id） */
+  mapId?: number
   /** 后端节点引用（内部使用，用于更新时复用站点/途经点 id） */
   nodeChain?: PathNodeRef[]
 }
@@ -119,6 +123,7 @@ function buildRoute(
     points,
     mode: normalizeMode(path.path_type),
     color: colorForId(path.id),
+    mapId: path.map_id,
     ...(stops.some((s) => s != null) ? { stops } : {}),
     nodeChain,
   }
@@ -156,11 +161,33 @@ export function getRouteById(id: number): Route | undefined {
   return getRoutes().find((r) => r.id === id)
 }
 
+/** 解析当前地图 id：取后端第一张地图；不存在则创建默认地图（对齐前端默认中心） */
+let cachedMapId: number | null = null
+async function getOrCreateMapId(): Promise<number> {
+  if (cachedMapId != null) return cachedMapId
+  const res = await mapsList()
+  const maps = res.data ?? []
+  const map = maps[0]
+  if (map) {
+    cachedMapId = map.id
+    return map.id
+  }
+  const created = await mapsCreate({
+    name: "默认地图",
+    center_lon: 113.9686,
+    center_lat: 22.6042,
+    zoom: 17,
+  })
+  cachedMapId = created.data.id
+  return created.data.id
+}
+
 /** 把前端 stops 数组转为后端节点链（创建站点/途经点并返回引用） */
 async function persistNodes(
   points: [number, number][],
   stops: (RouteStop | null)[] | undefined,
-  oldChain: PathNodeRef[] | undefined
+  oldChain: PathNodeRef[] | undefined,
+  mapId: number
 ): Promise<PathNodeRef[]> {
   const nodeChain: PathNodeRef[] = []
   for (let i = 0; i < points.length; i++) {
@@ -177,9 +204,10 @@ async function persistNodes(
           lon,
           lat,
           dwell_time: Math.max(0, Math.round(stop.waitSeconds)),
+          map_id: mapId,
         })
       } else {
-        await waypointsUpdate(old.id, { name: `途经点 ${i + 1}`, lon, lat })
+        await waypointsUpdate(old.id, { name: `途经点 ${i + 1}`, lon, lat, map_id: mapId })
       }
       nodeChain.push(old)
     } else {
@@ -190,10 +218,11 @@ async function persistNodes(
           lon,
           lat,
           dwell_time: Math.max(0, Math.round(stop.waitSeconds)),
+          map_id: mapId,
         })
         nodeChain.push({ type: "site", id: res.data.id })
       } else {
-        const res = await waypointsCreate({ name: `途经点 ${i + 1}`, lon, lat })
+        const res = await waypointsCreate({ name: `途经点 ${i + 1}`, lon, lat, map_id: mapId })
         nodeChain.push({ type: "waypoint", id: res.data.id })
       }
     }
@@ -210,11 +239,13 @@ export async function addRoute(
   stops?: (RouteStop | null)[]
 ): Promise<Route> {
   const clean = points.filter(isValidPoint)
-  const nodeChain = await persistNodes(clean, stops, undefined)
+  const mapId = await getOrCreateMapId()
+  const nodeChain = await persistNodes(clean, stops, undefined, mapId)
   const res = await pathsCreate({
     name: name || "未命名路线",
     path_type: mode,
     node_chain: nodeChain,
+    map_id: mapId,
   })
   const record = res.data
   const route: Route = {
@@ -223,6 +254,7 @@ export async function addRoute(
     points: clean,
     mode,
     color: colorForId(record.id),
+    mapId,
     ...(path && path.length >= 2 ? { path } : {}),
     ...(stops && stops.some((s) => s != null) ? { stops } : {}),
     nodeChain,
@@ -241,9 +273,10 @@ export async function updateRoute(id: number, patch: Partial<Route>): Promise<vo
   const mode = patch.mode ?? existing.mode ?? "road"
   const name = (patch.name ?? existing.name).trim() || existing.name
 
-  const nodeChain = await persistNodes(points, stops, existing.nodeChain)
+  const mapId = existing.mapId ?? (await getOrCreateMapId())
+  const nodeChain = await persistNodes(points, stops, existing.nodeChain, mapId)
 
-  await pathsUpdate(id, { name, path_type: mode, node_chain: nodeChain })
+  await pathsUpdate(id, { name, path_type: mode, node_chain: nodeChain, map_id: mapId })
 
   const cleanPath = patch.path && patch.path.length >= 2 ? patch.path : undefined
   cache = (cache ?? []).map((r) =>
@@ -253,6 +286,7 @@ export async function updateRoute(id: number, patch: Partial<Route>): Promise<vo
           name,
           points,
           mode,
+          mapId,
           ...(stops && stops.some((s) => s != null) ? { stops } : { stops: undefined }),
           ...(cleanPath ? { path: cleanPath } : { path: undefined }),
           nodeChain,

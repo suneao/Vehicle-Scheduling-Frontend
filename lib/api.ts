@@ -568,7 +568,65 @@ export async function testLogin(username: string, password: string) {
   })
 }
 
-// ==================== 10. 路线/站点/途经点模块 (Admin Paths/Sites/Waypoints) ====================
+// ==================== 10. 地图/路线/站点/途经点模块 (Admin Maps/Paths/Sites/Waypoints) ====================
+
+/** 后端地图记录 */
+export interface MapRecord {
+  id: number
+  name: string
+  description?: string | null
+  center_lon?: number
+  center_lat?: number
+  zoom?: number
+  created_at?: string
+}
+
+export interface MapCreatePayload {
+  name: string
+  description?: string
+  center_lon?: number
+  center_lat?: number
+  zoom?: number
+}
+
+export interface MapUpdatePayload {
+  name?: string
+  description?: string
+  center_lon?: number
+  center_lat?: number
+  zoom?: number
+}
+
+/** GET /admin/maps — 获取所有地图 */
+export async function mapsList() {
+  return request<MapRecord[]>("/admin/maps")
+}
+
+/** GET /admin/maps/{map_id} — 获取单张地图 */
+export async function mapsGet(mapId: number) {
+  return request<MapRecord>(`/admin/maps/${mapId}`)
+}
+
+/** POST /admin/maps — 新建地图 */
+export async function mapsCreate(data: MapCreatePayload) {
+  return request<MapRecord>("/admin/maps", {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+}
+
+/** PUT /admin/maps/{map_id} — 修改地图 */
+export async function mapsUpdate(mapId: number, data: MapUpdatePayload) {
+  return request<MapRecord>(`/admin/maps/${mapId}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  })
+}
+
+/** DELETE /admin/maps/{map_id} — 删除地图 */
+export async function mapsDelete(mapId: number) {
+  return request(`/admin/maps/${mapId}`, { method: "DELETE" })
+}
 
 /** 路线节点引用（site = 站点，waypoint = 途经点） */
 export interface PathNodeRef {
@@ -583,6 +641,7 @@ export interface PathRecord {
   path_type: string
   node_chain: PathNodeRef[]
   car_id?: number
+  map_id?: number
   created_at?: string
 }
 
@@ -591,6 +650,7 @@ export interface PathCreatePayload {
   path_type: string
   node_chain: PathNodeRef[]
   car_id?: number
+  map_id: number
 }
 
 export interface PathUpdatePayload {
@@ -598,6 +658,7 @@ export interface PathUpdatePayload {
   path_type?: string
   node_chain?: PathNodeRef[]
   car_id?: number
+  map_id?: number
 }
 
 /** 后端站点记录 */
@@ -608,6 +669,7 @@ export interface SiteRecord {
   lat: number
   dwell_time?: number
   description?: string | null
+  map_id?: number
   created_at?: string
 }
 
@@ -617,6 +679,7 @@ export interface SiteCreatePayload {
   lat: number
   dwell_time?: number
   description?: string
+  map_id: number
 }
 
 export interface SiteUpdatePayload {
@@ -625,6 +688,7 @@ export interface SiteUpdatePayload {
   lat?: number
   dwell_time?: number
   description?: string
+  map_id?: number
 }
 
 /** 后端途经点记录 */
@@ -634,6 +698,7 @@ export interface WaypointRecord {
   lon: number
   lat: number
   description?: string | null
+  map_id?: number
   created_at?: string
 }
 
@@ -642,6 +707,7 @@ export interface WaypointCreatePayload {
   lon: number
   lat: number
   description?: string
+  map_id: number
 }
 
 export interface WaypointUpdatePayload {
@@ -649,6 +715,7 @@ export interface WaypointUpdatePayload {
   lon?: number
   lat?: number
   description?: string
+  map_id?: number
 }
 
 /** GET /admin/paths/ — 获取所有路线（可筛选类型或小车） */
@@ -692,6 +759,11 @@ export async function sitesList() {
   return request<SiteRecord[]>("/admin/sites")
 }
 
+/** GET /admin/sites/{site_id} — 获取单个站点 */
+export async function sitesGet(siteId: number) {
+  return request<SiteRecord>(`/admin/sites/${siteId}`)
+}
+
 /** POST /admin/sites/ — 新增站点 */
 export async function sitesCreate(data: SiteCreatePayload) {
   return request<SiteRecord>("/admin/sites", {
@@ -716,6 +788,11 @@ export async function sitesDelete(siteId: number) {
 /** GET /admin/waypoints/ — 获取所有途经点 */
 export async function waypointsList() {
   return request<WaypointRecord[]>("/admin/waypoints")
+}
+
+/** GET /admin/waypoints/{wp_id} — 获取单个途经点 */
+export async function waypointsGet(wpId: number) {
+  return request<WaypointRecord>(`/admin/waypoints/${wpId}`)
 }
 
 /** POST /admin/waypoints/ — 新增途经点 */

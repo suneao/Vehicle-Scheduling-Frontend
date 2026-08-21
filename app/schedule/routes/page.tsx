@@ -408,7 +408,7 @@ export default function RoutesPage() {
             </CardTitle>
             <span className="text-[10px] text-muted-foreground/40">
               {drawing
-                ? `${draftPoints.length} 个点 · 双击删点`
+                ? `${draftPoints.length} 个点 · 拖拽调整/双击删点`
                 : editing
                   ? `${editPoints.length} 个点 · 拖拽/点击增点/双击删点`
                   : "点击路线可选中"}

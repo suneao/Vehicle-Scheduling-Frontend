@@ -280,7 +280,7 @@ export default function HelpPage() {
               <Steps
                 items={[
                   <>点击“添加路线”进入绘制模式，在地图上点击依次添加航点（至少 2 个），点击“保存路线”完成。</>,
-                  <>绘制模式中<strong className="text-foreground/90">双击</strong>任意航点可删除该点。</>,
+                  <>绘制模式中<strong className="text-foreground/90">拖动</strong>航点可调整位置，<strong className="text-foreground/90">双击</strong>任意航点可删除该点。</>,
                 ]}
               />
             </Sub>

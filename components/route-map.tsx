@@ -353,13 +353,25 @@ export function RouteMap({
       addCasedPolyline(draftLine, "#22c55e", 6, 0.95)
     }
 
-    // 绘制草稿点（绿色编号圆点，双击删除）
+    // 绘制草稿点（绿色编号圆点，可拖拽调整，双击删除）
     if (drawing) {
       cleanDraft.forEach((p, i) => {
         const marker = new AMap.Marker({
           position: p,
+          draggable: true,
           offset: new AMap.Pixel(-9, -9),
           content: pointMarkerHtml("#22c55e", String(i + 1)),
+        })
+        marker.on("dragend", (...args: unknown[]) => {
+          const e = args[0] as {
+            target?: { getPosition?: () => { getLng(): number; getLat(): number } | null }
+          }
+          const pos = e?.target?.getPosition?.()
+          if (!pos) return
+          const np: [number, number] = [pos.getLng(), pos.getLat()]
+          if (!Number.isFinite(np[0]) || !Number.isFinite(np[1])) return
+          const next = cleanDraft.map((pp, j) => (j === i ? np : pp))
+          onDraftPointsChangeRef.current?.(next)
         })
         marker.on("dblclick", () => {
           onDraftPointsChangeRef.current?.(cleanDraft.filter((_, j) => j !== i))

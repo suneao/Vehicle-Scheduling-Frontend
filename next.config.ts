@@ -8,8 +8,10 @@ const nextConfig: NextConfig = {
         destination: "http://39.108.77.178:8001/api/:path*",
       },
       {
-        // 列表/创建路径（前端不带尾斜杠，这里精确映射回后端带斜杠的地址），
-        // 避免 Next.js 去尾斜杠 + 后端补尾斜杠的双重重定向导致浏览器跨域丢失 Authorization
+        source: "/admin/maps",
+        destination: "http://39.108.77.178:8001/admin/maps/",
+      },
+      {
         source: "/admin/paths",
         destination: "http://39.108.77.178:8001/admin/paths/",
       },
